@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue';
 import { api } from '@/api';
 import { useSuites } from '@/stores/suites';
 import { useLive } from '@/stores/live';
+import { fixesTitle, runVerdict } from '@/fixes';
 import RunsChart from '@/components/RunsChart.vue';
 import StatusPill from '@/components/StatusPill.vue';
 import StatTile from '@/components/StatTile.vue';
@@ -87,7 +88,11 @@ const dur = (ms) => (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`);
                 {{ r.ok ? r.total : `${r.passed} of ${r.total}, stopped at ${r.step + 1}` }}
               </td>
               <td class="px-3 py-3 tabular-nums text-ink-2">{{ dur(r.ms) }}</td>
-              <td class="px-5 py-3 text-right"><StatusPill :ok="r.ok" size="sm" /></td>
+              <!-- A pass that needed automatic fixes reads differently from a clean
+                   one; what each fix did is on hover. -->
+              <td class="px-5 py-3 text-right">
+                <StatusPill :ok="r.ok" :fixed="runVerdict(r) === 'fixed'" :title="r.ok ? fixesTitle(r) : undefined" size="sm" />
+              </td>
             </tr>
           </tbody>
         </table>

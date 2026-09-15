@@ -22,6 +22,8 @@ import { defineStore } from 'pinia';
 import { hasAuth, wsUrl } from '@/config';
 import { api } from '@/api';
 import { useSession } from '@/stores/session';
+import { addFix } from '@/fixes';
+import { endThinking, thinkingOn } from '@/thinking';
 
 const MAX_LOG = 200;
 /** The page's console keeps more: there every line is the point, and a chatty page prints 200 in a second. */
@@ -63,13 +65,26 @@ export const useLive = defineStore('live', {
      * as ON, so a runner too old to send any turns nothing off in the UI.
      */
     switches: {},
+    /**
+     * Automatic fixes, as the runner applies them to THIS organisation:
+     * { mode: 'off'|'safe'|'ai', ai: { enabled, available, reason }, canManage }.
+     * From the greeting, and replaced whenever Settings changes the opt-in.
+     * Null until a runner that knows about fixes says so — which reads as off.
+     */
+    heal: null,
+    /**
+     * How many suggested fixes this organisation has waiting, pushed by the
+     * runner whenever that number changes. Null until the first push: not
+     * knowing is not zero, and a view that wants the list asks for it anyway.
+     */
+    fixesPending: null,
     targets: [],
     running: false,
     recording: false,
     recordedFlow: '',
     recordedCount: 0,
     // The run in progress, as the steps report themselves.
-    run: null,          // { suite, total, steps: [{i, state, ms, error}] }
+    run: null,          // { suite, total, ok, fixed, steps: [{i, state, ms, error, fixes, thinking}] }
     suiteRun: null,     // { suite, cases, done, passed }
     log: [],
     cursor: { x: 0, y: 0 },
@@ -170,6 +185,10 @@ export const useLive = defineStore('live', {
         this.connected = false;
         // We no longer know what the executor is doing; `ready` will say.
         this.running = false;
+        // Nor what it is thinking: a `done` sent while we were away never
+        // arrives, and a row saying "Working out what changed… 94s" for a run
+        // that ended during the outage is a hang that is not happening.
+        if (this.run) this.run.steps = this.run.steps.map(endThinking);
         if (this.ws === ws) this.ws = null;
         // 4401 is the runner closing the socket because the token that
         // bought its ticket has expired. The token is spent; forget it so
@@ -268,6 +287,7 @@ export const useLive = defineStore('live', {
           this.running = !!ev.running;
           this.recording = !!ev.recording;
           this.switches = ev.switches ?? {};
+          this.heal = ev.heal ?? null;
           break;
         // The browser changed hands, or was let go. When it is no longer ours
         // the page on it is someone else's: forget the address, the targets
@@ -332,17 +352,50 @@ export const useLive = defineStore('live', {
         case 'run.start':
           this.running = true;
           this.run = {
-            suite: ev.suite, caseName: ev.caseName ?? null, total: ev.total,
-            steps: Array.from({ length: ev.total }, (_, i) => ({ i, state: 'idle', ms: null, error: null })),
+            suite: ev.suite, caseName: ev.caseName ?? null, total: ev.total, ok: null, fixed: null,
+            steps: Array.from({ length: ev.total }, (_, i) => ({ i, state: 'idle', ms: null, error: null, fixes: [], thinking: null })),
           };
           break;
         case 'step.start': if (this.run) this.run.steps[ev.i] = { ...this.run.steps[ev.i], state: 'run', step: ev.step }; break;
-        case 'step.pass':  if (this.run) this.run.steps[ev.i] = { ...this.run.steps[ev.i], state: 'pass', ms: ev.ms }; break;
-        case 'step.fail':
-          if (this.run) this.run.steps[ev.i] = { ...this.run.steps[ev.i], state: 'fail', ms: ev.ms, error: ev.error };
+        /**
+         * A fix lands on its step the moment it is applied — before the step
+         * passes, because the pass is what the fix bought and the row should
+         * say how while it is still the running one. step.pass then carries
+         * the step's complete list, which wins: a fix that was tried and then
+         * superseded is not one the step needed.
+         */
+        case 'step.heal':
+          if (this.run?.steps[ev.i]) this.run.steps[ev.i] = { ...this.run.steps[ev.i], fixes: addFix(this.run.steps[ev.i].fixes, ev.fix) };
           break;
+        /**
+         * The runner is asking the AI about this step: reading the page,
+         * deciding, checking the answer. Kept on the step as { phase, text,
+         * since } for the one quiet line under its row, and cleared on `done`
+         * (thinking.js). A verdict clears it too, below — `done` always comes,
+         * but a socket that dropped it would otherwise leave a passed step
+         * still "working out what changed".
+         */
+        case 'step.thinking':
+          if (this.run?.steps[ev.i]) this.run.steps[ev.i] = thinkingOn(this.run.steps[ev.i], ev, Date.now());
+          break;
+        case 'step.pass':
+          if (this.run) {
+            const was = this.run.steps[ev.i];
+            this.run.steps[ev.i] = thinkingOn({ ...was, state: 'pass', ms: ev.ms, fixes: Array.isArray(ev.fixes) ? ev.fixes : (was?.fixes ?? []) }, ev);
+          }
+          break;
+        case 'step.fail':
+          if (this.run) this.run.steps[ev.i] = thinkingOn({ ...this.run.steps[ev.i], state: 'fail', ms: ev.ms, error: ev.error }, ev);
+          break;
+        // This organisation's count of suggestions waiting on a person changed.
+        case 'fixes': this.fixesPending = typeof ev.pending === 'number' ? ev.pending : this.fixesPending; break;
         case 'run.end':
           this.running = false;
+          // Kept on the run so the dock can say "Passed with 2 fixes" after the
+          // fact; a runner too old to count sends nothing, and null says so.
+          if (this.run) { this.run.ok = ev.ok ?? null; this.run.fixed = typeof ev.fixed === 'number' ? ev.fixed : null; }
+          // A run that ended is thinking about nothing, whatever its last step was told.
+          if (this.run) this.run.steps = this.run.steps.map((s) => thinkingOn(s, ev));
           if (this.suiteRun) { this.suiteRun.done++; if (ev.ok) this.suiteRun.passed++; }
           break;
 

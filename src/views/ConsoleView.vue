@@ -20,6 +20,8 @@ import { showAction, labelAction } from '@lang';
 import { useSuites } from '@/stores/suites';
 import { useUi } from '@/stores/ui';
 import { clock, countLevels, filterLogs, foldLogs, LEVELS, mergeLogs, whereFrom } from '@/logview';
+import { anySaved, countFixes, fixLines, kindLabel, modeDetail, modeLabel, passedWith, tierLabel, whyLine } from '@/fixes';
+import { anyThinking, elapsedLabel } from '@/thinking';
 import TopBar from '@/components/TopBar.vue';
 import Field from '@/components/Field.vue';
 import FlowBox from '@/components/FlowBox.vue';
@@ -67,13 +69,54 @@ const dockPanel = ref(null);
 const runList = ref(null);
 const logList = ref(null);
 
+/**
+ * Automatic fixes in this run: the runner's own count once it has ended, the
+ * steps' marks until then — and for a runner too old to count at all.
+ */
+const runFixes = computed(() => (live.run ? (live.run.fixed ?? countFixes(live.run.steps)) : 0));
+/**
+ * How a finished run that got through reads: "Passed with 2 fixes". Only for a
+ * pass — a failed step already says what stopped it, on its own row.
+ */
+const runSummary = computed(() => {
+  const run = live.run;
+  if (!run || live.running) return null;
+  const passed = run.ok ?? (run.steps.length > 0 && run.steps.every((s) => s.state === 'pass'));
+  return passed ? passedWith(runFixes.value) : null;
+});
+/** Which fix notes are opened to show the steps they changed, as `step:index`. */
+const openFixes = ref(new Set());
+function toggleFix(key) {
+  const next = new Set(openFixes.value);
+  if (next.has(key)) next.delete(key); else next.add(key);
+  openFixes.value = next;
+}
+watch(() => live.run, (run, before) => { if (run !== before) openFixes.value = new Set(); });
+
+/**
+ * The clock beside "Working out what changed… 3s". It ticks only while some
+ * step is waiting on the runner's thinking — a timer for every second the
+ * console is open would re-render the run list for nothing — and stops the
+ * moment the last one ends, or the view goes.
+ */
+const thinkingNow = ref(Date.now());
+let thinkingTimer = null;
+watch(() => anyThinking(live.run?.steps), (on) => {
+  clearInterval(thinkingTimer); thinkingTimer = null;
+  if (!on) return;
+  thinkingNow.value = Date.now();
+  thinkingTimer = setInterval(() => { thinkingNow.value = Date.now(); }, 1000);
+}, { immediate: true });
+onBeforeUnmount(() => clearInterval(thinkingTimer));
+
 /** The Run tab's badge: still going, or how the last run ended. */
 const runState = computed(() => {
   const run = live.run;
   if (!run) return null;
   if (live.running) return { tone: 'live', text: 'running' };
   if (run.steps.some((s) => s.state === 'fail')) return { tone: 'fail', text: 'failed' };
-  return { tone: 'pass', text: `${run.steps.filter((s) => s.state === 'pass').length}/${run.total}` };
+  const text = `${run.steps.filter((s) => s.state === 'pass').length}/${run.total}`;
+  return { tone: 'pass', text: runFixes.value ? `${text} · ${runFixes.value} fixed` : text };
 });
 
 /**
@@ -103,7 +146,8 @@ watch(() => live.run, (run, before) => {
   if (runList.value) runList.value.scrollTop = 0;
   ui.reveal('run');
 });
-watch(() => live.run?.steps.map((s) => s.state).join(), () => {
+// The thinking line makes the running row taller too, so its arrival is a reason to follow.
+watch(() => live.run?.steps.map((s) => `${s.state}${s.thinking ? '~' : ''}`).join(), () => {
   const box = runList.value;
   const row = activeRow();
   if (!box || !row || !following || inView(row, box)) return;
@@ -579,6 +623,10 @@ watch(() => live.recordedFlow, (f) => {
     ...(suite ? [{ label: 'Test suites', to: '/suites' }, { label: suite.name, to: `/suites/${suite.id}` }] : []),
     { label: 'Console' }]">
     <template #actions>
+      <!-- Quiet on purpose: it is a setting, not an event. What the mode does
+           is on hover; the organisation's AI opt-in lives in Settings. -->
+      <span v-if="live.connected" class="rounded-full border border-hairline px-3 py-1.5 text-[12.5px] text-ink-3"
+            :title="modeDetail(live.heal)">{{ modeLabel(live.heal) }}</span>
       <span class="rounded-full border border-hairline px-3 py-1.5 text-[12.5px] text-ink-2">
         {{ live.connected ? 'Runner connected' : 'Runner offline' }}
       </span>
@@ -915,11 +963,61 @@ watch(() => live.recordedFlow, (f) => {
             <span class="w-4 shrink-0" :class="{ 'text-good': s.state === 'pass', 'text-critical': s.state === 'fail' }">
               {{ { pass: '✓', fail: '✕', run: '·', idle: ' ' }[s.state] }}
             </span>
-            <span class="min-w-0 flex-1" :class="s.state === 'fail' ? 'text-critical' : 'text-ink-2'">
+            <div class="min-w-0 flex-1" :class="s.state === 'fail' ? 'text-critical' : 'text-ink-2'">
               {{ s.step ? describe(s.step) : '' }}
+              <!-- A step that only got through because the runner mended the
+                   page. The mark is small; the note under it is the point — what
+                   was done, in a sentence — and opening it shows the step as
+                   recorded beside what replaced it, with an AI fix's reason. -->
+              <span v-if="s.fixes?.length"
+                    class="ml-1.5 inline-flex rounded bg-warn/10 px-1 align-[1px] font-sans text-[10.5px] font-medium text-warn"
+                    :title="`${s.fixes.length} automatic fix${s.fixes.length === 1 ? '' : 'es'} on this step`">fixed</span>
+              <!-- The runner asking the AI about this step, said as it goes:
+                   reading, deciding, checking. Quiet on purpose — it is a wait,
+                   not a result. The region is there for the whole time the step
+                   runs so a screen reader hears each phase arrive; the clock is
+                   hidden from it, or it would be read out every second. Reduced
+                   motion keeps the words and drops the dots. -->
+              <span v-if="s.state === 'run' || s.thinking" aria-live="polite" class="block font-sans">
+                <span v-if="s.thinking" class="mt-0.5 flex items-center gap-1.5 text-[12px] text-ink-2">
+                  <span class="flex shrink-0 gap-0.5 motion-reduce:hidden" aria-hidden="true">
+                    <span v-for="d in 3" :key="d" class="size-1 rounded-full bg-warn opacity-25 animate-[thinking-dot_1.2s_ease-in-out_infinite]"
+                          :style="{ animationDelay: `${(d - 1) * 0.16}s` }" />
+                  </span>
+                  <span class="min-w-0">{{ s.thinking.text }}</span>
+                  <span class="shrink-0 tabular-nums text-ink-3" aria-hidden="true">{{ elapsedLabel(s.thinking.since, thinkingNow) }}</span>
+                </span>
+              </span>
               <span v-if="s.error" class="block whitespace-pre-wrap text-ink-2">{{ s.error }}</span>
-            </span>
+              <template v-for="(f, k) in s.fixes ?? []" :key="k">
+                <button type="button"
+                        class="mt-0.5 flex w-full items-baseline gap-1.5 rounded text-left font-sans text-[12px] text-ink-2 hover:text-ink"
+                        :aria-expanded="openFixes.has(`${s.i}:${k}`)"
+                        :title="whyLine(f) ?? `${tierLabel(f.tier)} · ${kindLabel(f.kind)}`"
+                        @click="toggleFix(`${s.i}:${k}`)">
+                  <span class="w-2.5 shrink-0 text-ink-3" aria-hidden="true">{{ openFixes.has(`${s.i}:${k}`) ? '▾' : '▸' }}</span>
+                  <span class="min-w-0">{{ f.note }}</span>
+                </button>
+                <div v-if="openFixes.has(`${s.i}:${k}`)" class="mb-1 ml-4 mt-1 space-y-0.5 border-l border-hairline pl-2.5">
+                  <p class="font-sans text-[11.5px] text-ink-3">
+                    {{ tierLabel(f.tier) }} · {{ kindLabel(f.kind) }}<template v-if="whyLine(f)"> · {{ whyLine(f) }}</template>
+                  </p>
+                  <p v-for="l in fixLines(f, { was: s.step?.at })" :key="l.role" class="whitespace-pre-wrap break-words">
+                    <span class="font-sans text-[11px] text-ink-3">{{ l.label }}</span>
+                    {{ ' ' }}<span :class="l.role === 'from' ? 'text-ink-3' : 'text-ink'">{{ l.text }}</span>
+                  </p>
+                </div>
+              </template>
+            </div>
             <span v-if="s.ms !== null" class="shrink-0 tabular-nums text-ink-3">{{ s.ms }}ms</span>
+          </li>
+          <li v-if="runSummary" class="mt-2 flex gap-2 border-t border-hairline px-1 pt-2 font-sans text-[12.5px]">
+            <span class="font-medium" :class="runFixes ? 'text-warn' : 'text-good'">{{ runSummary }}</span>
+            <!-- Only a run of a saved case keeps its fixes as suggestions; a run
+                 typed or loaded into this box has nowhere to keep them. -->
+            <span v-if="runFixes" class="text-ink-3">
+              — what each fix did is on its step.<template v-if="anySaved(live.run?.steps)"> A fix to a saved case waits on its Cases page until someone accepts it.</template>
+            </span>
           </li>
         </ol>
         <p v-else class="text-[12.5px] text-ink-3">

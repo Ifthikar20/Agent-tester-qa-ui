@@ -85,6 +85,13 @@ async function req(path, { method = 'GET', body } = {}) {
       err.switchedOff = data.switch ?? null;
       err.message = data.message || 'This is turned off on this deployment';
     }
+    // A suggested fix was made against a case that has since been edited, so
+    // the step it would change is no longer the step it saw. Not a fault:
+    // the suggestion is simply gone, and the view says why it disappeared.
+    if (res.status === 409 && data.error === 'stale') {
+      err.stale = true;
+      err.message = 'This case changed since the fix was suggested';
+    }
     // Too many requests from this address. Retry-After is in seconds.
     if (res.status === 429) {
       const wait = Number(res.headers.get('retry-after')) || Number(data.retryAfter) || null;
@@ -157,4 +164,15 @@ export const api = {
     if (pace !== undefined) q.set('pace', String(pace));
     return req(`/api/suites/${id}/run${q.size ? `?${q}` : ''}`, { method: 'POST' });
   },
+
+  // Automatic fixes. A fix the runner applied to a SAVED case is kept as a
+  // suggestion, and only a person accepting it changes the case — the run
+  // passing is not consent to rewrite the test. Accepting needs the same
+  // permission as editing the case; reading them does not.
+  listFixes:  (status = 'pending') => req(`/api/fixes?status=${encodeURIComponent(status)}`),
+  acceptFix:  (id) => req(`/api/fixes/${encodeURIComponent(id)}/accept`, { method: 'POST' }),
+  rejectFix:  (id) => req(`/api/fixes/${encodeURIComponent(id)}/reject`, { method: 'POST' }),
+  getHealSettings: () => req('/api/settings/heal'),
+  // The organisation's opt-in to AI fixes: an owner's or admin's.
+  setHealSettings: (ai) => req('/api/settings/heal', { method: 'PUT', body: { ai: !!ai } }),
 };

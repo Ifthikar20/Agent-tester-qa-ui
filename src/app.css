@@ -131,6 +131,12 @@ button:disabled { cursor: not-allowed; }
   to { transform: translateX(300%); }
 }
 
+/* The runner thinking: three dots brightening in turn under a running step. */
+@keyframes thinking-dot {
+  0%, 80%, 100% { opacity: 0.25; }
+  40% { opacity: 1; }
+}
+
 /* Radiant's display type: large, tight, and never letter-spaced apart. */
 @utility display {
   letter-spacing: -0.035em;
