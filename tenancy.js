@@ -35,6 +35,8 @@ import * as origins from './origins.js';
 import * as vault from './secrets.js';
 import * as history from './runs.js';
 import * as suites from './suites.js';
+import * as monitors from './monitor.js';
+import * as support from './support.js';
 
 export { LOCAL, isOrg };
 
@@ -59,6 +61,8 @@ export function workspace(org) {
       vault: vault.forOrg(org),
       history: history.forOrg(org),
       suites: suites.forOrg(org),
+      monitors: monitors.forOrg(org),
+      support: support.forOrg(org),
     };
     spaces.set(org, space);
   }

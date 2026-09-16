@@ -135,4 +135,28 @@ export const api = {
     if (pace !== undefined) q.set('pace', String(pace));
     return req(`/api/suites/${id}/run${q.size ? `?${q}` : ''}`, { method: 'POST' });
   },
+
+  // Agentic monitoring: the runner's monitors, incidents and screenshot clips.
+  // A clip is bytes behind the gate, so it comes back as a Blob (Shot.vue).
+  monitoring:      () => req('/api/monitoring'),
+  // ?suite= narrows both to a project's own (the suite it was made from, or the
+  // suite whose origin the monitored page is on).
+  monitors:        (suite) => req(`/api/monitors${suite ? `?suite=${encodeURIComponent(suite)}` : ''}`),
+  createMonitor:   (body) => req('/api/monitors', { method: 'POST', body }),
+  removeMonitor:   (id) => req(`/api/monitors/${id}`, { method: 'DELETE' }),
+  pauseMonitor:    (id) => req(`/api/monitors/${id}/pause`, { method: 'POST' }),
+  resumeMonitor:   (id) => req(`/api/monitors/${id}/resume`, { method: 'POST' }),
+  incidents:       (status, suite) => {
+    const q = new URLSearchParams();
+    if (status) q.set('status', status);
+    if (suite) q.set('suite', suite);
+    return req(`/api/incidents${q.size ? `?${q}` : ''}`);
+  },
+  resolveIncident: (id) => req(`/api/incidents/${id}/resolve`, { method: 'POST' }),
+  monitorShot:     (name) => bytes(`/api/monitors/shots/${encodeURIComponent(name)}`),
+
+  // Help & support: a request from the top bar, and the access switch it turns on.
+  support:        () => req('/api/support'),
+  requestSupport: (body) => req('/api/support/request', { method: 'POST', body }),
+  disableSupport: () => req('/api/support/access', { method: 'DELETE' }),
 };

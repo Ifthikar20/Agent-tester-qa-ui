@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice">
+  <!-- A stand-in for the canvas photograph behind the landing page: the same
+       weight of colour, warm in the middle and violet at the foot, with a
+       little grain. Replace with the photograph (LandingView.vue, CANVAS). -->
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fbfbfc"/>
+      <stop offset="0.42" stop-color="#f7e9da"/>
+      <stop offset="0.78" stop-color="#d8c3f1"/>
+      <stop offset="1" stop-color="#5a3fd4"/>
+    </linearGradient>
+    <radialGradient id="warm" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#f7b267" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#f7b267" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="rose" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#f28cb1" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#f28cb1" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="violet" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#6d4ce6" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#6d4ce6" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="46"/>
+    </filter>
+    <filter id="grain">
+      <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" seed="7"/>
+      <feColorMatrix type="saturate" values="0"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.22"/></feComponentTransfer>
+    </filter>
+  </defs>
+  <rect width="1600" height="1000" fill="url(#sky)"/>
+  <g filter="url(#soft)">
+    <ellipse cx="820" cy="640" rx="640" ry="250" fill="url(#warm)"/>
+    <ellipse cx="380" cy="760" rx="440" ry="230" fill="url(#rose)"/>
+    <ellipse cx="1260" cy="880" rx="600" ry="280" fill="url(#violet)"/>
+  </g>
+  <rect width="1600" height="1000" filter="url(#grain)"/>
+</svg>

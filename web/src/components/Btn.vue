@@ -25,7 +25,7 @@ defineProps({
  * you are never deciding between a pink block and a red block.
  */
 const LOOK = {
-  primary: 'bg-brand text-white hover:bg-brand-2',
+  primary: 'bg-brand text-white hover:bg-brand-deep',
   ghost:   'border border-hairline bg-panel text-ink hover:border-ink/25 hover:bg-ink/[0.03]',
   danger:  'border border-critical/40 bg-panel text-critical hover:bg-critical/5',
 };

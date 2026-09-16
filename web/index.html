@@ -3,8 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
   <title>ghostclick</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Crect width=%2716%27 height=%2716%27 rx=%274%27 fill=%27%230f1729%27/%3E%3Ccircle cx=%278%27 cy=%278%27 r=%272.6%27 fill=%27%23f8c8dc%27/%3E%3C/svg%3E">
+  <!-- The theme, before anything paints. A file, not inline: public/theme-boot.js says why. -->
+  <script src="/theme-boot.js"></script>
+  <!-- Inter, the app's one typeface (app.css --font-display), from Google
+       Fonts with swap: the system sans shows until it lands, and stays if it
+       never does — a runner with no way out still reads fine. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400..800&display=swap">
 </head>
 <body>
   <div id="app"></div>

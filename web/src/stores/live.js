@@ -24,6 +24,13 @@ import { api } from '@/api';
 import { useSession } from '@/stores/session';
 
 const MAX_LOG = 200;
+/** Incidents kept in memory; the runner keeps the same number on disk. */
+const MAX_INCIDENTS = 200;
+/** Replace an item by id in place, or put a new one first. */
+function upsert(list, item) {
+  const i = list.findIndex((x) => x.id === item.id);
+  if (i < 0) list.unshift(item); else list.splice(i, 1, item);
+}
 /**
  * Reconnect timing. Fast at first — the server restarts often while you are
  * working on it — and doubling up to thirty seconds, so a runner that is down
@@ -85,6 +92,26 @@ export const useLive = defineStore('live', {
     backoff: RECONNECT_MIN_MS,   // the next reconnect delay; reset on a clean open
     reconnectTimer: null,
     wanted: false,      // did someone ask for a socket? off after disconnect()
+    /**
+     * Agentic monitoring — the runner's, mirrored. REST loads the lists
+     * (loadMonitoring) and the socket keeps them current. `picking` is never
+     * set optimistically: the runner refuses to pick while a run or a
+     * recording holds the page or the browser is another organisation's, and
+     * the refusal arrives as `refused` — a button that flipped itself would
+     * lie for a round trip and then snap back.
+     */
+    monitors: [],       // PublicMonitor, newest first
+    incidents: [],      // Incident, newest first, capped
+    picking: false,     // the runner's picker is armed on the page
+    picked: null,       // { selector, fingerprint, snapshot, label, url } from monitor.selected
+    pickError: null,    // a sentence for the Pick button, from a refusal
+    monitoring: null,   // the /api/monitoring summary: { llm, budget, counts, picking }
+    /**
+     * Help & support (support.js): whether support access is on for this
+     * organisation, as the runner last said. Loaded once the socket is up and
+     * kept current by the `support` event every request or switch-off sends.
+     */
+    support: { enabled: false, since: null },
   }),
 
   getters: {
@@ -97,6 +124,26 @@ export const useLive = defineStore('live', {
      * the server's own default is the right answer and it may not be 420.
      */
     paceMs: (s) => (s.pace === 'fast' ? 0 : undefined),
+    /** Open incidents, for the sidebar's dot and the monitoring page's count. */
+    openIncidents: (s) => s.incidents.filter((i) => i.status === 'open').length,
+    /**
+     * The navigation that produced the address we are showing — or none.
+     *
+     * Matched on the URL rather than just taking the newest chain, because they
+     * can legitimately disagree: a hash change or a pushState navigates without
+     * producing a document, so no chain is recorded for it and the newest one
+     * is still the load that got you to the page. Comparing without the hash
+     * keeps that chain attached where it belongs, and stops a stale one being
+     * shown beside an address it did not produce — which would claim a redirect
+     * that never happened. Here rather than in a view, because the console and
+     * the monitoring page both draw the address bar.
+     */
+    currentNav: (s) => {
+      if (!s.url || s.url === 'about:blank') return null;
+      const withoutHash = (u) => { try { const x = new URL(u); x.hash = ''; return x.href; } catch { return u; } };
+      const here = withoutHash(s.url);
+      return s.navs.find((n) => n.url && withoutHash(n.url) === here) ?? null;
+    },
   },
 
   actions: {
@@ -156,6 +203,9 @@ export const useLive = defineStore('live', {
         this.connected = false;
         // We no longer know what the executor is doing; `ready` will say.
         this.running = false;
+        // Nor whether the picker is armed on a page we cannot see.
+        this.picking = false;
+        this.pickError = null;
         if (this.ws === ws) this.ws = null;
         // 4401 is the runner closing the socket because the token that
         // bought its ticket has expired. The token is spent; forget it so
@@ -207,6 +257,8 @@ export const useLive = defineStore('live', {
       }
       this.connected = false;
       this.running = false;
+      this.picking = false;
+      this.pickError = null;
     },
 
     send(msg) {
@@ -233,6 +285,46 @@ export const useLive = defineStore('live', {
       this.painted = false;
     },
 
+    // ---- agentic monitoring
+    upsertMonitor(m) { if (m?.id) upsert(this.monitors, m); },
+    upsertIncident(i) {
+      if (!i?.id) return;
+      upsert(this.incidents, i);
+      if (this.incidents.length > MAX_INCIDENTS) this.incidents.length = MAX_INCIDENTS;
+    },
+    dropMonitor(id) {
+      this.monitors = this.monitors.filter((m) => m.id !== id);
+      // The runner dropped its incidents with it; so does this page.
+      this.incidents = this.incidents.filter((i) => i.monitorId !== id);
+    },
+    /**
+     * The monitoring page's lists, from the runner. A `monitor.changed` that
+     * lands between the runner answering and these assignments is overwritten;
+     * the next tick or change repairs it, and a REST answer that is a moment
+     * old is what a page load shows anyway.
+     */
+    async loadMonitoring() {
+      const [m, i] = await Promise.all([api.monitors(), api.incidents()]);
+      this.monitors = m.monitors ?? [];
+      this.incidents = (i.incidents ?? []).slice(0, MAX_INCIDENTS);
+      // The summary is the badge in the top bar; a failure there is not a failure of the page.
+      this.monitoring = await api.monitoring().catch(() => null);
+      if (this.monitoring) this.picking = !!this.monitoring.picking;
+    },
+    /** Whether support access is on, from the runner; the top bar's pill draws it. */
+    async loadSupport() {
+      try {
+        const s = await api.support();
+        this.support = { enabled: !!s.enabled, since: s.since ?? null };
+      } catch { /* the pill stays off until the runner answers */ }
+    },
+    /** The open incidents alone — the sidebar's dot, right before the page has been visited. */
+    async loadOpenIncidents() {
+      try {
+        for (const inc of (await api.incidents('open')).incidents ?? []) upsert(this.incidents, inc);
+      } catch { /* the dot stays off until the page is visited */ }
+    },
+
     say(msg, level = 'info') {
       this.log.unshift({ id: `${Date.now()}-${Math.random()}`, at: Date.now(), level, msg });
       if (this.log.length > MAX_LOG) this.log.length = MAX_LOG;
@@ -245,7 +337,12 @@ export const useLive = defineStore('live', {
           // is driving; the URL is there only when the page is ours, and the
           // vault's key names never are (they come from /api/state).
           this.url = ev.url; this.origins = ev.origins;
+          // Another organisation's socket (an org switch reconnects with a
+          // new ticket): its monitors are not ours to show.
+          if (this.org && ev.org && this.org !== ev.org) { this.monitors = []; this.incidents = []; this.picked = null; this.monitoring = null; }
           this.org = ev.org ?? null;
+          if ('picking' in ev) this.picking = !!ev.picking;
+          if (ev.url === null) this.picked = null;
           if (ev.driving) this.driving = ev.driving;
           if (ev.url === null) { this.targets = []; this.lastFrame = null; this.painted = false; }
           // Trust the server over whatever we last saw. A socket that dropped
@@ -259,7 +356,7 @@ export const useLive = defineStore('live', {
         // and the last picture rather than keep showing them.
         case 'driving':
           this.driving = { org: ev.org ?? null, held: !!ev.held, mine: !!ev.mine };
-          if (!ev.mine) { this.url = null; this.targets = []; this.lastFrame = null; this.painted = false; this.running = false; }
+          if (!ev.mine) { this.url = null; this.targets = []; this.lastFrame = null; this.painted = false; this.running = false; this.picking = false; this.picked = null; }
           break;
         case 'origins': this.origins = ev.origins; break;
         case 'secrets': this.secrets = ev.secrets; break;
@@ -278,6 +375,14 @@ export const useLive = defineStore('live', {
         // the remedy — sign in again, a bigger plan, waiting — rather than
         // only show the sentence.
         case 'refused':
+          // The picker's refusal is a sentence beside the Pick button, in the
+          // runner's own words — or the sentence the same refusal gets elsewhere.
+          if (ev.of === 'monitor.pick.start') {
+            this.pickError = ev.error === 'runner_busy' ? 'Another organisation is driving the runner right now — try again when it is free'
+              : ev.error === 'forbidden' ? 'Only an owner or admin of this organisation can do that'
+                : ev.error === 'entitlement' ? null
+                  : (ev.error || 'The runner refused to start picking');
+          }
           if (ev.error === 'step_up_required') this.say('Allowing an origin needs a recent sign-in — sign in again, then retry', 'error');
           else if (ev.error === 'entitlement') this.upgrade = { limit: ev.limit, plan: ev.plan, of: ev.of };
           else if (ev.error === 'runner_busy') this.say('Another organisation is driving the runner right now — try again when it is free', 'error');
@@ -330,6 +435,26 @@ export const useLive = defineStore('live', {
         case 'imported':
           this.recordedFlow = ev.flow;
           this.recordedCount = ev.steps;
+          break;
+        // Agentic monitoring: the runner's monitors and incidents, mirrored.
+        case 'support': this.support = { enabled: !!ev.enabled, since: ev.since ?? null }; break;
+        case 'monitor.pick': this.picking = !!ev.on; if (ev.on) this.pickError = null; break;
+        case 'monitor.selected':
+          this.picking = false;
+          this.picked = { selector: ev.selector, fingerprint: ev.fingerprint ?? null, snapshot: ev.snapshot ?? null, label: ev.label ?? '', url: ev.url ?? this.url };
+          break;
+        case 'monitor.tick': {
+          // Only the numbers; the rest of the card is the monitor's, which arrives whole as monitor.changed.
+          const m = this.monitors.find((x) => x.id === ev.monitorId);
+          if (m) { m.metrics = ev.metrics; m.state = ev.state; m.lastTickAt = ev.at; }
+          break;
+        }
+        case 'monitor.changed': this.upsertMonitor(ev.monitor); break;
+        case 'monitor.gone': this.dropMonitor(ev.id); break;
+        case 'incident.opened':
+        case 'incident.updated':
+        case 'incident.resolved':
+          this.upsertIncident(ev.incident);
           break;
         case 'log': this.say(ev.msg, ev.level); break;
       }

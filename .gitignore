@@ -11,6 +11,10 @@ node_modules/
 # `npm start` builds it when it is missing or stale, which is what made the
 # committed copy redundant. A checkout with no node_modules cannot build, and
 # says so rather than serving something silently wrong.
+#
+# After the repo split the build moved from web/dist/ to dist/ at the root
+# (vite.config outDir), so that is the path that has to be ignored now.
+dist/
 web/dist/
 web/node_modules/
 

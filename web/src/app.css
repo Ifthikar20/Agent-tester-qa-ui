@@ -1,5 +1,17 @@
 @import "tailwindcss";
 
+/* `dark:` follows the choice on <html> (public/theme-boot.js, App.vue) rather
+   than the device's preference alone, because a viewer can choose. Screen only,
+   like the night palette below: a page printed at night comes out on paper the
+   way it always has. */
+@custom-variant dark {
+  @media screen {
+    &:where([data-theme=dark], [data-theme=dark] *) {
+      @slot;
+    }
+  }
+}
+
 /**
  * The one stylesheet. The hand-written dashboard and console this replaced each
  * carried their own copy of these tokens, which is exactly how two pages end up
@@ -21,7 +33,11 @@
  * (ΔE 9.4, clear of the ≥8 target). That pair is unchanged here.
  */
 @theme {
-  --font-display: ui-sans-serif, -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
+  /* Inter for everything (web/index.html loads it), the system sans behind
+     it. One friendly, rounded-feeling sans at every size, rather than the
+     platform's own UI face pretending to be a headline. */
+  --font-display: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 
   --color-ground:     #fbfbfc;
   --color-panel:      #ffffff;
@@ -35,6 +51,10 @@
   --color-brand:      #e6007c;
   --color-brand-2:    #c2006a;
   --color-brand-50:   #fdeef6;
+  /* What a primary button darkens to under the pointer. It was brand-2 until
+     night, where the text shade has to turn light and white on it would no
+     longer read. */
+  --color-brand-deep: #c2006a;
 
   /* Kept for the one place a dark surface is correct: the stage the driven
      browser is streamed onto, which should not glow at you. */
@@ -52,6 +72,13 @@
   --color-critical:   #d03b3b;
   --color-warn:       #a86b00;
 
+  /* Text on a solid fill of ink or of critical, and the veil behind a sheet.
+     White, and a tint of ink, while the ground is light; at night ink itself
+     turns light, so each needs a value of its own. */
+  --color-on-ink:      #ffffff;
+  --color-on-critical: #ffffff;
+  --color-scrim:       #101014;
+
   --radius-card:      0.875rem;
 }
 
@@ -66,13 +93,83 @@
     radial-gradient(50% 100% at 100% 10%, var(--color-glow-2) 0%, transparent 55%);
 }
 
+/**
+ * The canvas behind the landing page drifts up at a fraction of the scroll,
+ * where the browser can run an animation off the scroll position itself: no
+ * script, no frame that lands late. Anywhere else, and for anyone who asked
+ * for less motion, the picture simply sits — the fades do the work.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  @supports (animation-timeline: scroll()) {
+    .canvas-drift {
+      animation: canvas-drift linear both;
+      animation-timeline: scroll(root);
+    }
+    @keyframes canvas-drift {
+      from { transform: translateY(0); }
+      to { transform: translateY(-22vh); }
+    }
+  }
+}
+
 /* ------------------------------------------------------------------ base */
 html { color-scheme: light; }
+
+/* ----------------------------------------------------------------- night */
+/**
+ * The same tokens, at night — switched by `data-theme` on <html>, chosen on
+ * the settings page (Appearance). Unlayered like the rest of this section, so
+ * it outranks Tailwind's `@layer theme` defaults, and its selector outranks the
+ * `html` rule above.
+ *
+ * Surfaces keep their order — ground darker than panel — so a well, a table's
+ * header band and the TopBar still read as recessed. Text is off-white, never
+ * white. The accent fill does not move (white on it is 4.5:1 either way); its
+ * text shade and its tint do. Every text colour clears 4.5:1 on ground and on
+ * panel, and the chart pair still separates under deuteranopia.
+ */
+@media screen {
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+
+    --color-ground:     #0e0f13;
+    --color-panel:      #16171d;
+    --color-ink:        #ececf1;
+    --color-ink-2:      #b1b1bd;
+    --color-ink-3:      #90909d;
+    --color-hairline:   #2a2b33;
+
+    --color-brand-2:    #ff5eab;
+    --color-brand-50:   #3a0f27;
+
+    --color-glow-1:     #3a2418;
+    --color-glow-2:     #3b1430;
+    --color-glow-3:     #241c45;
+
+    --color-pass:       #7c7a84;
+    --color-fail:       #f26b6b;
+    --color-good:       #46cf5e;
+    --color-critical:   #f26b6b;
+    --color-warn:       #e3a33b;
+
+    --color-on-ink:      #0e0f13;
+    --color-on-critical: #0e0f13;
+    --color-scrim:       #000000;
+  }
+}
+
+/* Held on <html> for the one style recalculation a change of theme takes
+   (App.vue), so buttons change colour with the page instead of easing into it
+   a beat afterwards. */
+:root[data-theme-switching] *,
+:root[data-theme-switching] *::before,
+:root[data-theme-switching] *::after { transition: none !important; }
 body {
   margin: 0;
   background: var(--color-ground);
   color: var(--color-ink);
   font-family: var(--font-display);
+  font-optical-sizing: auto;
   -webkit-font-smoothing: antialiased;
 }
 :focus-visible { outline: 2px solid var(--color-brand); outline-offset: 2px; }
@@ -92,11 +189,12 @@ button:not(:disabled):active, [role="button"]:not([aria-disabled="true"]):active
 }
 button:disabled { cursor: not-allowed; }
 
-/* Radiant's display type: large, tight, and never letter-spaced apart. */
+/* Display type: large, bold and tight, the way a headline is set rather than
+   a form label enlarged. Never letter-spaced apart. */
 @utility display {
-  letter-spacing: -0.035em;
-  line-height: 1.02;
-  font-weight: 500;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+  font-weight: 700;
 }
 
 /* One card, everywhere. A hairline and the faintest lift, never a drop shadow. */

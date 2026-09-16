@@ -94,6 +94,12 @@ const consoleLink = computed(() => ({
   },
 }));
 
+/** Monitoring on this suite, opened on its first page the way the console is. */
+const monitoringLink = computed(() => ({
+  path: '/monitoring',
+  query: { suite: suite.value.id, url: suite.value.pages[0]?.url ?? suite.value.baseUrl },
+}));
+
 const runLabel = computed(() => {
   const s = live.suiteRun;
   return s ? `Running ${Math.min(s.done + 1, s.cases)} of ${s.cases}…` : 'Running…';
@@ -103,6 +109,8 @@ const runLabel = computed(() => {
 <template>
   <TopBar :crumbs="crumbs">
     <template #actions>
+      <RouterLink v-if="suite" :to="monitoringLink"
+                  class="rounded-full border border-hairline px-4 py-2 text-[13.5px]">Monitoring</RouterLink>
       <RouterLink v-if="suite" :to="consoleLink"
                   class="rounded-full border border-hairline px-4 py-2 text-[13.5px]">Console</RouterLink>
       <Btn v-if="suite" :busy="running || live.running" :busy-label="runLabel"

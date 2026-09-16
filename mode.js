@@ -91,6 +91,10 @@ export const TURNSTILE = Boolean((process.env.GC_TURNSTILE_SITE_KEY ?? '').trim(
 export function csp({ authOrigin = AUTH_ORIGIN, turnstile = TURNSTILE } = {}) {
   const connect = ['\'self\'', 'wss:', 'https:', ...(authOrigin ? [authOrigin] : [])].join(' ');
   const script = turnstile ? `; script-src 'self' ${TURNSTILE_HOST}; frame-src ${TURNSTILE_HOST}` : '';
+  // The typeface (web/index.html) is the one thing fetched from another
+  // origin: its stylesheet from Google Fonts, its files from their CDN.
+  // Nothing there can run or connect — style-src and font-src only.
   return `default-src 'self'; connect-src ${connect}${script}; img-src 'self' data: blob:; `
-    + 'style-src \'self\' \'unsafe-inline\'; frame-ancestors \'none\'';
+    + 'style-src \'self\' \'unsafe-inline\' https://fonts.googleapis.com; '
+    + 'font-src \'self\' https://fonts.gstatic.com; frame-ancestors \'none\'';
 }

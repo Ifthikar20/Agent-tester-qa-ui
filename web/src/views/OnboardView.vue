@@ -236,7 +236,7 @@ const recordFirst = () => router.push({ path: '/console', query: { suite: suite.
         </Field>
       </div>
       <div class="mt-6 flex gap-2">
-        <button class="rounded-full bg-brand hover:bg-brand-2 px-5 py-2.5 text-[13.5px] font-medium text-white disabled:bg-ink/[0.05] disabled:text-ink-3"
+        <button class="rounded-full bg-brand hover:bg-brand-deep px-5 py-2.5 text-[13.5px] font-medium text-white disabled:bg-ink/[0.05] disabled:text-ink-3"
                 :disabled="!draft.name || !draft.baseUrl || busy" @click="createSuite">
           {{ busy ? 'Creating…' : 'Create suite' }}
         </button>
@@ -252,7 +252,7 @@ const recordFirst = () => router.push({ path: '/console', query: { suite: suite.
           The runner refuses to open an origin nobody approved, and no script can approve one.
           This button is the only way in, and it is deliberately a person pressing it.
         </p>
-        <button class="mt-4 rounded-full bg-brand hover:bg-brand-2 px-4 py-2 text-[13px] font-medium text-white disabled:bg-ink/[0.05] disabled:text-ink-3"
+        <button class="mt-4 rounded-full bg-brand hover:bg-brand-deep px-4 py-2 text-[13px] font-medium text-white disabled:bg-ink/[0.05] disabled:text-ink-3"
                 :disabled="busy" @click="allow">Allow {{ origin }}</button>
       </div>
       <div v-else class="flex items-center gap-2 rounded-xl border border-hairline bg-panel px-4 py-2.5 text-[13px]">
@@ -314,7 +314,7 @@ const recordFirst = () => router.push({ path: '/console', query: { suite: suite.
       </div>
 
       <div class="flex gap-2">
-        <button class="rounded-full bg-brand hover:bg-brand-2 px-5 py-2.5 text-[13.5px] font-medium text-white disabled:bg-ink/[0.05] disabled:text-ink-3"
+        <button class="rounded-full bg-brand hover:bg-brand-deep px-5 py-2.5 text-[13.5px] font-medium text-white disabled:bg-ink/[0.05] disabled:text-ink-3"
                 :disabled="!suite.pages.length" @click="step = 3">Next — expectations</button>
         <button class="rounded-full border border-hairline px-5 py-2.5 text-[13.5px]" @click="finish">Finish later</button>
       </div>
@@ -362,7 +362,7 @@ const recordFirst = () => router.push({ path: '/console', query: { suite: suite.
       </div>
 
       <div class="flex gap-2">
-        <button class="rounded-full bg-brand hover:bg-brand-2 px-5 py-2.5 text-[13.5px] font-medium text-white disabled:bg-ink/[0.05] disabled:text-ink-3"
+        <button class="rounded-full bg-brand hover:bg-brand-deep px-5 py-2.5 text-[13.5px] font-medium text-white disabled:bg-ink/[0.05] disabled:text-ink-3"
                 :disabled="busy" @click="saveExpectations">{{ busy ? 'Saving…' : 'Save expectations' }}</button>
         <button class="rounded-full border border-hairline px-5 py-2.5 text-[13.5px]" @click="step = 2">Back</button>
       </div>
@@ -386,7 +386,7 @@ const recordFirst = () => router.push({ path: '/console', query: { suite: suite.
             One case per page: reach it, and assert everything you ticked. This is the test that
             catches “the URL moved” before anyone files it as a mystery.
           </p>
-          <button class="mt-4 rounded-full bg-brand hover:bg-brand-2 px-4 py-2 text-[13px] font-medium text-white disabled:bg-ink/[0.05] disabled:text-ink-3"
+          <button class="mt-4 rounded-full bg-brand hover:bg-brand-deep px-4 py-2 text-[13px] font-medium text-white disabled:bg-ink/[0.05] disabled:text-ink-3"
                   :disabled="busy" @click="generateChecks">{{ busy ? 'Generating…' : 'Generate cases' }}</button>
         </div>
         <div class="card p-5">

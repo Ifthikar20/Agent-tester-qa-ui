@@ -20,6 +20,16 @@
  */
 import Btn from '@/components/Btn.vue';
 
+/**
+ * The canvas behind the opening: a painting, photographed. The page colour
+ * covers it at the top so the words sit on something calm, the texture comes
+ * through toward the foot of the hero, and it fades back to the page colour
+ * under the section after, so scrolling on never crosses an edge. The file
+ * lives in web/public; the SVG there is a stand-in with the same weight of
+ * colour — drop the photograph beside it and point this at it.
+ */
+const CANVAS = `${import.meta.env.BASE_URL}landing-canvas.svg`;
+
 /** What a case actually looks like, taken from the language the parser accepts. */
 const SCRIPT = `goto https://staging.acme.com/
 fill 'Email' : textbox = $QA_USER
@@ -44,9 +54,11 @@ const CLAIMS = [
 </script>
 
 <template>
-  <div class="min-h-dvh">
+  <!-- `isolate`: the canvas below is z-indexed under everything in here, the
+       bar included, and this is the stacking context that makes that true. -->
+  <div class="relative isolate min-h-dvh">
     <!-- The bar is links, not navigation: there are two places to go. -->
-    <header class="border-b border-hairline">
+    <header class="border-b border-hairline/60">
       <div class="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
         <span class="text-[15px] font-semibold tracking-tight">
           ghost<span class="text-brand">click</span>
@@ -64,10 +76,28 @@ const CLAIMS = [
     </header>
 
     <main>
+      <!-- The opening — the hero and the case — sits on the canvas, and the
+           canvas ends with it: sized by the content, not the viewport, so the
+           page colour has fully risen back over the picture exactly where the
+           next section begins, whatever the screen. It reaches up behind the
+           bar too. Three layers: the picture, the page colour laid over its
+           top and thinning down the hero, and the page colour rising over its
+           foot. Where the browser can drive an animation from the scroll
+           position the picture also drifts up a little slower than the page
+           (app.css canvas-drift); elsewhere it simply sits. -->
+      <div class="relative">
+        <div class="pointer-events-none absolute inset-x-0 -top-16 bottom-0 -z-10 overflow-hidden" aria-hidden="true">
+          <div class="canvas-drift absolute inset-x-0 top-0 -bottom-[24vh] bg-cover bg-center"
+               :style="{ backgroundImage: `url(${CANVAS})` }" />
+          <div class="absolute inset-0 bg-gradient-to-b from-ground via-ground/70 via-35% to-transparent" />
+          <div class="absolute inset-x-0 bottom-0 h-[45%] bg-gradient-to-t from-ground via-ground/75 via-30% to-transparent" />
+        </div>
+
       <!-- Hero. Sized to what it holds; a viewport-tall opener would push the
            rest of the page out of the first frame. -->
-      <section class="wash">
-        <div class="mx-auto max-w-5xl px-6 pb-16 pt-14 sm:pt-20">
+      <!-- No wash of its own: the canvas behind the page is the colour here. -->
+      <section>
+        <div class="mx-auto max-w-5xl px-6 pb-24 pt-14 sm:pb-32 sm:pt-20">
           <p class="eyebrow">Browser testing you can watch</p>
           <!-- No hard break: at a phone's width it strands a word on its own
                line. `text-balance` lets the browser choose, which is the only
@@ -113,6 +143,7 @@ const CLAIMS = [
           </div>
         </div>
       </section>
+      </div>
 
       <!-- Three claims, each checkable on the next screen. -->
       <section class="border-t border-hairline bg-panel">
