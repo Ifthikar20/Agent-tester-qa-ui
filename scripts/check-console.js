@@ -557,6 +557,41 @@ else bad('a hop to another host shows that host', text.replace(/\n/g, ' | ').sli
 if (/left localhost:3000/.test(text)) ok('and says which one it left', 'left localhost:3000');
 else bad('and says which one it left', text.replace(/\n/g, ' | ').slice(0, 70));
 
+// ---------------------------------------------------------------------------
+console.log('\n— 9 · back, and home ——————————————————————————————');
+
+/**
+ * A login that bounces the driven page to another origin used to leave no way
+ * back: Open reopens the box, and the box follows the address only on arrival.
+ * Back is the browser's own history, offered only when the runner says there
+ * is a page behind this one; Home reopens the page last opened on purpose —
+ * which is not the same thing as whatever the box says.
+ */
+const back = page.getByRole('button', { name: 'Back' });
+const home = page.getByRole('button', { name: 'Home' });
+const barShows = (want) => page.waitForFunction((w) => {
+  const el = document.querySelector('div.rounded-t-xl');
+  return el && el.innerText.includes(w);
+}, want, { timeout: 15000 }).catch(() => {});
+
+await openUrl(`${API}/demo.html`);
+await openUrl(`${API}/links.html`);
+if (await back.isEnabled()) ok('after two pages, Back is offered'); else bad('after two pages, Back is offered', 'disabled');
+await back.click();
+await barShows('demo.html');
+text = await bar.innerText();
+if (/demo\.html/.test(text)) ok('Back returns to the page before', text.split('\n')[0]);
+else bad('Back returns to the page before', text.replace(/\n/g, ' | ').slice(0, 70));
+
+// The box still says links.html, but that is not what decides: Home reopens
+// the page last opened on purpose, which was links.html — through Open's gate.
+if (await home.isEnabled()) ok('Home is offered once something was opened'); else bad('Home is offered once something was opened', 'disabled');
+await home.click();
+await barShows('links.html');
+text = await bar.innerText();
+if (/links\.html/.test(text)) ok('Home reopens the page last opened on purpose', text.split('\n')[0]);
+else bad('Home reopens the page last opened on purpose', text.replace(/\n/g, ' | ').slice(0, 70));
+
 await browser.close();
 console.log(failures
   ? `\n  ${failures} FAILED\n`
@@ -564,6 +599,7 @@ console.log(failures
     '       before it can, the wheel reaches the page you are driving, and a\n' +
     '       saved case can be picked up and run from here — including one\n' +
     '       recorded after a redirect that left the origin. What the driven\n' +
-    '       page printed is here too, with vault values redacted, and the\n' +
-    '       address bar says where the runner is and what it went through.\n');
+    '       page printed is here too, with vault values redacted, the address\n' +
+    '       bar says where the runner is and what it went through, and Back\n' +
+    '       and Home take you back.\n');
 process.exit(failures ? 1 : 0);

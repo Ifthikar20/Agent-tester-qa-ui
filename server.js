@@ -28,6 +28,8 @@ import { MonitorAgent } from './monitor-page.js';
 import { findApiKey, createResolver, createBudget, MODEL as MONITOR_MODEL } from './monitor-resolver.js';
 import { llmModeFrom, compactSnapshot, previewSpec } from './monitor-rules.js';
 import { redactWith } from './redact.js';
+import * as chat from './chat.js';
+import { findApiKey as findChatApiKey, createResolver as createChatResolver, chatModeFrom, MODEL as CHAT_MODEL } from './chat-resolver.js';
 
 const require = createRequire(import.meta.url);
 const PORT = Number(process.env.PORT) || 3000;
@@ -114,6 +116,13 @@ const HEADED = /^(1|true|yes|on)$/i.test(process.env.HEADED ?? '');
  * and the browser is the part of the runner that renders pages other people
  * choose. Nothing that prints ever sees the key, only where it came from.
  */
+/**
+ * The chat's key (chat-resolver.js), read HERE — before monitoring, just
+ * below, takes ANTHROPIC_API_KEY out of the environment — and only read: the
+ * delete stays where it is, so the browser is started without the key as
+ * before. Held inside the resolver alone; the banner says where it came from.
+ */
+const CHAT_KEY = findChatApiKey({ env: process.env, root: fileURLToPath(new URL('./', import.meta.url)) });
 const MONITOR_KEY = findApiKey({ env: process.env, root: fileURLToPath(new URL('./', import.meta.url)) });
 delete process.env.ANTHROPIC_API_KEY;
 const MONITOR_LLM = llmModeFrom({ env: process.env, haveKey: Boolean(MONITOR_KEY.key) });
@@ -128,6 +137,26 @@ if (!Number.isInteger(MONITOR_AI_PER_DAY) || MONITOR_AI_PER_DAY < 0) {
 }
 const monitorResolver = MONITOR_LLM.mode === 'claude' ? createResolver({ apiKey: MONITOR_KEY.key }) : null;
 const monitorBudget = createBudget({ max: MONITOR_AI_PER_DAY });
+
+/**
+ * The chat's mind (chat.js, chat-resolver.js): Claude when a key is here,
+ * the mock mind — rules over the same tools — otherwise, and GC_CHAT to say
+ * so explicitly. A word the runner does not know stops it here, never read as
+ * off. The budget is the process's, in memory: a ceiling against a runaway
+ * conversation, not billing.
+ */
+const CHAT = chatModeFrom({ env: process.env, haveKey: Boolean(CHAT_KEY.key) });
+if (CHAT.error) {
+  console.error(`\n  ${CHAT.error}\n`);
+  process.exit(1);
+}
+const CHAT_AI_PER_DAY = process.env.GC_CHAT_AI_MAX_PER_DAY?.trim() ? Number(process.env.GC_CHAT_AI_MAX_PER_DAY) : 200;
+if (!Number.isInteger(CHAT_AI_PER_DAY) || CHAT_AI_PER_DAY < 0) {
+  console.error(`\n  GC_CHAT_AI_MAX_PER_DAY is "${process.env.GC_CHAT_AI_MAX_PER_DAY}"; it takes a whole number of calls a day.\n`);
+  process.exit(1);
+}
+const chatResolver = CHAT.mode === 'claude' ? createChatResolver({ apiKey: CHAT_KEY.key }) : null;
+const chatBudget = createBudget({ max: CHAT_AI_PER_DAY });
 
 /**
  * Every store is keyed by organisation (tenancy.js, docs/AUTH.md §10). The
@@ -177,6 +206,16 @@ let running = false;
  * caller reads them at request time, which is why rebinding them is enough.
  */
 let cdp = null;
+/**
+ * Whether Back would land on a page. Decided from Chrome's own history, never
+ * from page.goBack()'s answer: that is null both when there is nothing to go
+ * back to and after a same-document step (a hash change, a pushState) that
+ * did go back — and it will happily go back to the blank page a fresh context
+ * starts on, which is "nothing open", not somewhere to offer. `historySeq`
+ * drops an answer a newer navigation has overtaken.
+ */
+let canGoBack = false;
+let historySeq = 0;
 let cursor = null;
 let nav = null;
 /** The monitoring agent inside the driven page (monitor-page.js); remade with the session. */
@@ -384,6 +423,10 @@ const fail = (res, err, code = 400) => {
   if (err instanceof NoSuchSuite) return res.status(404).json({ ok: false, error: err.message });
   // A monitor or an incident this organisation does not have, likewise.
   if (err instanceof monitoring.NoSuchMonitor || err instanceof monitoring.NoSuchIncident) return res.status(404).json({ ok: false, error: err.message });
+  // The chat writes one reply at a time per organisation (chat.js): a 409
+  // naming the turn in flight, so the UI waits for it rather than retrying.
+  if (err instanceof chat.ChatBusy) return res.status(409).json({ ok: false, error: 'chat_busy', turnId: err.turnId, conversationId: err.conversationId });
+  if (err instanceof chat.NoSuchConversation) return res.status(404).json({ ok: false, error: err.message });
   // The monitoring engine names the status of its own refusals: 409 for
   // nothing open or too many monitors, 422 for an element that is not there.
   return res.status(err.status ?? code).json({ ok: false, error: err.message ?? String(err) });
@@ -480,13 +523,38 @@ const steppedUp = (claims) => !AUTH_ON || (typeof claims?.su === 'number' && Dat
  * than on a timer means the number a plan says is the number a page shows,
  * and there is no job to forget to run.
  */
-const historyOf = (req) => {
-  req.space.history.prune(req.ent.limit('history.retention_days'));
-  return req.space.history;
+const historyFor = (space, ent) => {
+  space.history.prune(ent.limit('history.retention_days'));
+  return space.history;
 };
+const historyOf = (req) => historyFor(req.space, req.ent);
 
 app.get('/api/runs', (req, res) => res.json(historyOf(req).summary(14, req.query.suite || null)));
 app.get('/api/defects', (req, res) => res.json(historyOf(req).defects(14)));
+
+/**
+ * The defects as the chat's tools read them (chat-tools.js). This runner
+ * derives them from history rather than numbering and filing them, so the
+ * rows are the same shape with no id and no severity, `byId` is false — the
+ * tool that reads one by number is not offered — and a run names no defect.
+ */
+const chatDefectsFor = (space, ent) => {
+  const rows = () => historyFor(space, ent).defects(14).defects.map((d) => ({
+    id: null, status: d.open ? 'open' : 'closed', severity: null, hits: d.hits, reopened: 0,
+    firstSeen: d.first, lastSeen: d.last, title: d.error, target: null,
+    cases: d.cases.map((c) => c.name), suites: d.suites.slice(),
+  }));
+  return {
+    byId: false,
+    list: (status = 'open') => rows().filter((d) => status === 'all' || d.status === status),
+    totals: () => {
+      const all = rows();
+      const open = all.filter((d) => d.status === 'open').length;
+      return { all: all.length, open, reopened: 0, known_issue: 0, wont_fix: 0, closed: all.length - open, unassigned: open };
+    },
+    idFor: () => null,
+  };
+};
 
 /**
  * Pictures for the hero panels, if anyone has put any there.
@@ -658,13 +726,33 @@ app.get('/api/version', (_req, res) => res.json({ ...identity, built: buildTime(
  * from its own stores — the same numbers the refusals are made from, so the
  * page that shows them cannot disagree with the 402 that follows.
  */
-const usage = (req) => ({
-  suites: { used: req.space.suites.list().length, max: req.ent.limit('suites.max') },
-  runs: { used: req.space.history.today(), max: req.ent.limit('runs.per_day') },
-  origins: { used: req.space.origins.list().length, max: req.ent.limit('origins.max') },
-  vault: req.ent.enabled('vault.enabled'),
-  retentionDays: req.ent.limit('history.retention_days'),
+const usageOf = (space, ent) => ({
+  suites: { used: space.suites.list().length, max: ent.limit('suites.max') },
+  runs: { used: space.history.today(), max: ent.limit('runs.per_day') },
+  origins: { used: space.origins.list().length, max: ent.limit('origins.max') },
+  vault: ent.enabled('vault.enabled'),
+  retentionDays: ent.limit('history.retention_days'),
 });
+const usage = (req) => usageOf(req.space, req.ent);
+
+/**
+ * The runner as the chat describes it (chat-tools.js runner_state): the
+ * console's state, less what a person has a page for. The address is the
+ * driving organisation's alone, as on /api/state. No switches on this runner.
+ */
+const stateFor = (space, ent) => {
+  const mine = driver.sees(space.org);
+  return {
+    url: mine ? currentUrl() : null,
+    running: mine && running,
+    recording: mine && (recorder?.recording ?? false),
+    driving: driver.describe(space.org),
+    origins: space.origins.list(),
+    plan: ent.plan,
+    usage: usageOf(space, ent),
+    switches: null,
+  };
+};
 
 app.get('/api/state', (req, res) => {
   // The page belongs to whoever is driving. Another organisation is told the
@@ -787,11 +875,20 @@ app.post('/api/suites/:id/pages/:pageId/scan', async (req, res) => {
   } catch (err) { return fail(res, err, 404); }
 
   if (gate(res, originOf(suite), space)) return;
-  // The lock before the run lock: an organisation that cannot have the
-  // browser is told it is busy, not that "a run is in progress" — which is
-  // someone else's run, and none of its business.
-  try { await take(space.org); } catch (err) { return fail(res, err); }
-  if (running) return fail(res, new Error('A run is in progress'), 409);
+  try { sendOk(res, await scanPageOf({ suite, pg, space })); }
+  catch (err) { fail(res, err); }
+});
+
+/**
+ * The scan itself, for the route above and for the chat (chat.js) once a
+ * person has confirmed it. The caller has passed the origin gate; the locks
+ * are taken here — the browser's before the run's, so an organisation that
+ * cannot have the browser is told it is busy (RunnerBusy), not that "a run
+ * is in progress", which is someone else's run and none of its business.
+ */
+async function scanPageOf({ suite, pg, space }) {
+  await take(space.org);
+  if (running) throw Object.assign(new Error('A run is in progress'), { status: 409 });
 
   running = true;
   try {
@@ -801,15 +898,13 @@ app.post('/api/suites/:id/pages/:pageId/scan', async (req, res) => {
     const saved = space.suites.updatePage(suite.id, pg.id, { targets: items, linked });
     emit({ t: 'log', level: 'info',
            msg: `scanned ${pg.url} — ${items.length} targets, ${linked.length} links` });
-    sendOk(res, { page: saved, url: page.url() });
-  } catch (err) {
-    fail(res, err);
+    return { page: saved, url: page.url() };
   } finally {
     running = false;
     armRelease();
     await publishTargets();
   }
-});
+}
 
 app.post('/api/suites/:id/cases', (req, res) => {
   try { sendOk(res, { case: req.space.suites.addCase(req.params.id, req.body ?? {}, checkFlowFor(req.space)) }); }
@@ -840,19 +935,27 @@ app.post('/api/suites/:id/run', async (req, res) => {
   const wanted = req.query.case
     ? suite.cases.filter((c) => c.id === req.query.case)
     : suite.cases;
-  if (!wanted.length) return fail(res, new Error('This suite has no cases to run'));
-  // The whole suite, counted up front: a run that would stop at case three
-  // of five is refused before case one, not discovered halfway. And the
-  // plan before the lock: a run the plan refuses never takes the browser.
-  try {
-    req.ent.check('runs.per_day', space.history.today(), wanted.length);
-    await take(space.org);
-  } catch (err) { return fail(res, err); }
-  if (running) return fail(res, new Error('A run is in progress'), 409);
-
   // How much of this run to perform, for this run only. Absent means the
   // server's default, so a caller that has never heard of pace is unaffected.
   const pace = paceOf(req.query.pace, PACE);
+  try { sendOk(res, await runCasesOf({ suite, wanted, pace, space, ent: req.ent })); }
+  catch (err) { fail(res, err); }
+});
+
+/**
+ * The run itself — the cases in order, a failure stopping none of the
+ * others — for the route above and for the chat (chat.js), which runs a
+ * saved case when asked to. The caller has passed the origin gate. The whole
+ * suite is counted up front: a run that would stop at case three of five is
+ * refused before case one, not discovered halfway. And the plan before the
+ * lock: a run the plan refuses never takes the browser.
+ */
+async function runCasesOf({ suite, wanted, pace = PACE, space, ent }) {
+  if (!wanted.length) throw new Error('This suite has no cases to run');
+  ent.check('runs.per_day', space.history.today(), wanted.length);
+  await take(space.org);
+  if (running) throw Object.assign(new Error('A run is in progress'), { status: 409 });
+
   const checkFlow = checkFlowFor(space);
 
   emit({ t: 'suite.start', suite: suite.name, cases: wanted.length });
@@ -872,14 +975,14 @@ app.post('/api/suites/:id/run', async (req, res) => {
     // Express 4 does not catch a rejection from an async handler, so an
     // unexpected throw here would take the process with it rather than failing
     // one case. A suite run survives a bad case.
-    const r = await run(plan, { suiteId: suite.id, caseId: c.id, caseName: c.name, pace, space, ent: req.ent })
+    const r = await run(plan, { suiteId: suite.id, caseId: c.id, caseName: c.name, pace, space, ent })
       .catch((err) => ({ ok: false, passed: 0, total: 0, error: err.message }));
     outcomes.push({ case: c.id, name: c.name, ...r });
   }
   const passed = outcomes.filter((o) => o.ok).length;
   emit({ t: 'suite.end', suite: suite.name, passed, total: outcomes.length });
-  sendOk(res, { suite: suite.id, passed, total: outcomes.length, outcomes });
-});
+  return { suite: suite.id, passed, total: outcomes.length, outcomes };
+}
 
 /**
  * One URL in, a running test out.
@@ -905,8 +1008,21 @@ app.post('/api/suites/quickstart', async (req, res) => {
     req.ent.check('runs.per_day', space.history.today());
   } catch (err) { return fail(res, err); }
   if (gate(res, u.origin, space)) return;
-  try { await take(space.org); } catch (err) { return fail(res, err); }
-  if (running) return fail(res, new Error('A run is in progress'), 409);
+  try { sendOk(res, await quickstartOf({ u, name: req.body?.name, space, ent: req.ent })); }
+  catch (err) { fail(res, err); }
+});
+
+/**
+ * Quickstart itself, for the route above and for the chat (chat.js) once a
+ * person has confirmed it: the plan's two counts, the locks, the visit, the
+ * suite and its first page, and that page's check, run once. The caller has
+ * passed the origin gate.
+ */
+async function quickstartOf({ u, name, space, ent }) {
+  ent.check('suites.max', space.suites.list().length);
+  ent.check('runs.per_day', space.history.today());
+  await take(space.org);
+  if (running) throw Object.assign(new Error('A run is in progress'), { status: 409 });
 
   let suite, pg, items;
   running = true;
@@ -920,7 +1036,7 @@ app.post('/api/suites/quickstart', async (req, res) => {
     const path = `${u.pathname}${u.search}${u.hash}`;
 
     suite = space.suites.create({
-      name: String(req.body?.name ?? '').trim() || title || u.host,
+      name: String(name ?? '').trim() || title || u.host,
       baseUrl: u.href,
       description: `Added from ${u.href}`,
     });
@@ -930,8 +1046,6 @@ app.post('/api/suites/quickstart', async (req, res) => {
       expect: [{ kind: 'url', value: path }],
     });
     space.suites.updatePage(suite.id, pg.id, { targets: items, linked });
-  } catch (err) {
-    return fail(res, err);
   } finally {
     running = false;
     armRelease();
@@ -940,14 +1054,14 @@ app.post('/api/suites/quickstart', async (req, res) => {
   const checkFlow = checkFlowFor(space);
   const flow = pageCheckFlow(space.suites.get(suite.id), space.suites.get(suite.id).pages[0]);
   const c = space.suites.addCase(suite.id, { name: `${pg.name} loads`, pageId: pg.id, flow }, checkFlow);
-  const outcome = await run(checkFlow(flow), { suiteId: suite.id, caseId: c.id, caseName: c.name, space, ent: req.ent });
+  const outcome = await run(checkFlow(flow), { suiteId: suite.id, caseId: c.id, caseName: c.name, space, ent });
 
-  sendOk(res, {
+  return {
     suite: space.suites.get(suite.id),
     targets: items.length,
     run: outcome,
-  });
-});
+  };
+}
 
 /** A page's expectations, as a flow you can read before you run it. */
 app.get('/api/suites/:id/pages/:pageId/check', (req, res) => {
@@ -1110,6 +1224,28 @@ app.delete('/api/support/access', (req, res) => {
   emitTo(req.space.org, { t: 'log', level: 'info', msg: 'support access is off for this organisation' });
   sendOk(res, { enabled: s.enabled, since: s.since });
 });
+
+/**
+ * The chat (chat.js): what this runner knows about the organisation, asked in
+ * words, and its saved cases run from the same box. A turn is accepted with a
+ * 202 and answered on the organisation's sockets (`chat.*` events), because
+ * an answer that runs a case takes as long as the case does. One reply at a
+ * time per organisation; the transcript is kept per organisation. This runner
+ * has no switches, so the chat is simply on.
+ */
+app.get('/api/chat', (req, res) => res.json({ ok: true, on: true, ...chat.describe(req.space) }));
+app.get('/api/chat/:id', (req, res) => {
+  try { sendOk(res, { conversation: req.space.chat.get(req.params.id) }); } catch (err) { fail(res, err); }
+});
+app.delete('/api/chat/:id', (req, res) => {
+  try { sendOk(res, req.space.chat.remove(req.params.id)); } catch (err) { fail(res, err); }
+});
+app.post('/api/chat/turns', (req, res) => {
+  try {
+    const turn = chat.turn({ ...(req.body ?? {}), space: req.space, ent: req.ent, by: req.user?.sub ?? LOCAL });
+    res.status(202).json({ ok: true, conversationId: turn.conversationId, turnId: turn.id });
+  } catch (err) { fail(res, err); }
+});
 /**
  * Redirect shapes worth testing, for the bundled demo.
  *
@@ -1270,6 +1406,9 @@ console.log(`\n  ghostclick  ->  http://localhost:${PORT}` +
             `\n  monitoring  ->  ${MONITOR_LLM.mode === 'claude'
               ? `Claude (${MONITOR_MODEL}) compiles rules and judges incidents — key from ${MONITOR_KEY.source}, at most ${monitorBudget.max} calls a day (GC_MONITOR_AI_MAX_PER_DAY)`
               : `the mock compiler and judge${MONITOR_KEY.key ? ' (GC_MONITOR_LLM=mock)' : ' — set ANTHROPIC_API_KEY for Claude'}`}` +
+            `\n  chat        ->  ${CHAT.mode === 'claude'
+              ? `Claude (${CHAT_MODEL}) answers from the organisation's own stores and runs its saved cases — key from ${CHAT_KEY.source}, at most ${chatBudget.max} calls a day (GC_CHAT_AI_MAX_PER_DAY)`
+              : `the mock mind — rules over the same tools${CHAT_KEY.key ? ' (GC_CHAT=mock)' : ' — set ANTHROPIC_API_KEY for Claude'}`}` +
             `\n  version     ->  ${identity.commit ?? 'unknown'}` +
             `${buildTime() ? `, ui built ${buildTime().replace('T', ' ').slice(0, 16)}` : ', ui NOT BUILT'}\n`);
 
@@ -1412,6 +1551,24 @@ function entryUrl(page) {
 
 
 /** What can the current page be told to do? Emitted whenever it changes. */
+/**
+ * Ask Chrome whether there is a page behind this one, and tell the console.
+ * Called on every navigation, un-awaited: the answer that matters is the
+ * newest one, so an older query that lands late — or one that belongs to a
+ * page an organisation handover has since replaced — is dropped.
+ */
+async function refreshHistory() {
+  const seq = ++historySeq;
+  const session = cdp;
+  try {
+    const { currentIndex, entries } = await cdp.send('Page.getNavigationHistory');
+    if (seq !== historySeq || cdp !== session) return;
+    const prev = entries[currentIndex - 1];
+    canGoBack = !!prev && !/^about:/.test(prev.url ?? '');
+    emit({ t: 'history', back: canGoBack });
+  } catch { /* the page went away mid-navigation; the next one asks again */ }
+}
+
 async function publishTargets() {
   try {
     emit({ t: 'targets', url: currentUrl(), items: await discover(page) });
@@ -1441,6 +1598,8 @@ async function newSession() {
     serviceWorkers: BLOCK_PRIVATE ? 'block' : 'allow',
   });
   cdp = await page.context().newCDPSession(page);
+  // A fresh page has nothing behind it — the next navigation says otherwise.
+  canGoBack = false;
 
   /**
    * Every request the driven page makes, inspected (reach.js). The allowlist
@@ -1627,6 +1786,7 @@ async function newSession() {
      * response, so the NavigationLog never sees them.
      */
     emit({ t: 'url', url: currentUrl() });
+    refreshHistory();
     publishTargets();
     // A navigation ends a pick — the element under the pointer is gone — and
     // hands the new document its monitors. A new document arms them through
@@ -1685,6 +1845,30 @@ monitoring.configure({
   resolver: monitorResolver,
   budget: monitorBudget,
   isIdle: () => !running && !(recorder?.recording),
+});
+
+/**
+ * The chat's one configuration (chat.js): the sockets, which mind, the
+ * budget and the runner's own actions — the same functions the routes call,
+ * so what the chat runs is what a button would have run. No saved-session
+ * values to redact on this runner beyond the vault's.
+ */
+chat.configure({
+  emitTo,
+  log: console,
+  llm: { mode: CHAT.mode, model: CHAT.mode === 'claude' ? CHAT_MODEL : null, key: { have: Boolean(CHAT_KEY.key), from: CHAT_KEY.source } },
+  resolver: chatResolver,
+  budget: chatBudget,
+  actions: {
+    state: stateFor,
+    history: historyFor,
+    defects: chatDefectsFor,
+    checkFlow: checkFlowFor,
+    runCases: runCasesOf,
+    runPlan: run,
+    scanPage: scanPageOf,
+    quickstart: quickstartOf,
+  },
 });
 
 await newSession();
@@ -1810,7 +1994,9 @@ async function run(plan, meta = {}) {
       emit({ t: 'log', level: 'error', msg: `could not draw the report: ${err.message}` });
     }
     await publishTargets();
-    return { ok, passed, total: results.length, error: entry.error };
+    // The failing step, so a caller can say where a run stopped without
+    // reading the history back (the chat does). This history keeps no target.
+    return { ok, passed, total: results.length, error: entry.error, step: entry.step, target: entry.target ?? null };
   } finally {
     // Clear the lock BEFORE announcing the end. run.end means "you may start
     // another run"; emitting it while still locked makes a caller that runs
@@ -2113,6 +2299,17 @@ wss.on('connection', (ws) => {
           return void page.keyboard.press(m.key).catch(() => {});
         }
       }
+      // The browser's own back — the console's Back button. Offered from what
+      // the last navigation left in `canGoBack`, so "nothing to go back to" is
+      // said rather than silently doing nothing, and the blank page a fresh
+      // context starts on is never a destination. No new gate: a history step
+      // is one the page's own link could have produced.
+      if (m.t === 'human.back') {
+        if (!canGoBack) return void tell({ t: 'log', level: 'warn', msg: 'Nothing to go back to' });
+        return void page.goBack({ waitUntil: 'commit' })
+          .then(() => emit({ t: 'log', level: 'info', msg: `went back to ${currentUrl() ?? 'nothing'}` }))
+          .catch((err) => emit({ t: 'log', level: 'error', msg: `could not go back: ${err.message}` }));
+      }
     }
   });
 
@@ -2128,6 +2325,8 @@ wss.on('connection', (ws) => {
   ws.send(JSON.stringify({
     t: 'ready',
     url: mine ? currentUrl() : null,
+    // Whether Back has somewhere to go, as the last navigation left it.
+    back: mine && canGoBack,
     // The executor's real state. Without this a socket that reconnected during
     // a run kept a disabled Run button until someone reloaded the page.
     running: mine && running,
