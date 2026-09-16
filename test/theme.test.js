@@ -105,8 +105,10 @@ function colours(prelude) {
 const LIGHT = colours('@theme');
 const NIGHT = colours(':root\\[data-theme="dark"\\]');
 const DARK = { ...LIGHT, ...NIGHT };
-/** The same by day and by night, on purpose: the accent fill and its hover, and the console stage's navy. */
-const SHARED = new Set(['brand', 'brand-deep', 'night', 'night-2', 'night-line']);
+/** The same by day and by night, on purpose: the accent fill and its hover, the console stage's navy,
+ *  and a defect's status fills, which carry white text either way (DefectStatus). */
+const SHARED = new Set(['brand', 'brand-deep', 'night', 'night-2', 'night-line',
+  'status-open', 'status-reopened', 'status-known', 'status-wontfix', 'status-closed']);
 
 test('every colour has a night value, or is shared on purpose', () => {
   for (const n of Object.keys(NIGHT)) {

@@ -81,6 +81,18 @@
   --color-on-critical: #ffffff;
   --color-scrim:       #101014;
 
+  /* A defect's status, filled the way a tracker's status column is
+     (DefectStatus). Each clears 4.5:1 under white text, and none is the only
+     signal — the glyph and the word always sit inside the fill. Blue means
+     "open" only in a list of defects; in the case language it is still an
+     address. The same by night: the text inside is white either way, so the
+     fills stay the dark ones white reads on (test/theme.test.js SHARED). */
+  --color-status-open:     #2563eb;
+  --color-status-reopened: #d03b3b;
+  --color-status-known:    #b45309;
+  --color-status-wontfix:  #64748b;
+  --color-status-closed:   #15803d;
+
   /* The case language, coloured (FlowRead, and the editor in FlowBox). One hue
      per verb, so what a step does reads before its words do — each dark enough
      to be 12.5px text on the ground (4.6:1 and up), and never the only signal,
