@@ -22,6 +22,7 @@ import { useUi } from '@/stores/ui';
 import { clock, countLevels, filterLogs, foldLogs, LEVELS, mergeLogs, whereFrom } from '@/logview';
 import { anySaved, countFixes, fixLines, kindLabel, modeDetail, modeLabel, passedWith, tierLabel, whyLine } from '@/fixes';
 import { anyThinking, elapsedLabel } from '@/thinking';
+import { byAi, entryChips, kindLabel as entryLabel, traceHeading, traceOpen, traceSummary } from '@/reasoning';
 import TopBar from '@/components/TopBar.vue';
 import Field from '@/components/Field.vue';
 import FlowBox from '@/components/FlowBox.vue';
@@ -91,7 +92,22 @@ function toggleFix(key) {
   if (next.has(key)) next.delete(key); else next.add(key);
   openFixes.value = next;
 }
-watch(() => live.run, (run, before) => { if (run !== before) openFixes.value = new Set(); });
+/**
+ * Which steps' traces a person folded or opened, by step index — over the
+ * default, which is open while a step runs or once it fails, and folded once
+ * it passes (reasoning.js traceOpen).
+ */
+const traceFolds = ref(new Map());
+function toggleTrace(s) {
+  const next = new Map(traceFolds.value);
+  next.set(s.i, !traceOpen(s, traceFolds.value));
+  traceFolds.value = next;
+}
+watch(() => live.run, (run, before) => {
+  if (run === before) return;
+  openFixes.value = new Set();
+  traceFolds.value = new Map();
+});
 
 /**
  * The clock beside "Working out what changed… 3s". It ticks only while some
@@ -146,8 +162,8 @@ watch(() => live.run, (run, before) => {
   if (runList.value) runList.value.scrollTop = 0;
   ui.reveal('run');
 });
-// The thinking line makes the running row taller too, so its arrival is a reason to follow.
-watch(() => live.run?.steps.map((s) => `${s.state}${s.thinking ? '~' : ''}`).join(), () => {
+// The thinking line and each line of a trace make the running row taller too, so their arrival is a reason to follow.
+watch(() => live.run?.steps.map((s) => `${s.state}${s.thinking ? '~' : ''}${s.trace?.length ?? 0}`).join(), () => {
   const box = runList.value;
   const row = activeRow();
   if (!box || !row || !following || inView(row, box)) return;
@@ -793,7 +809,14 @@ watch(() => live.recordedFlow, (f) => {
           Drive the page on the canvas. A typed password is dropped here and written as a vault
           reference — it never reaches this script, the log, or the diagram.
         </p>
-        <FlowBox :model-value="live.recordedFlow" :rows="8" readonly class="mt-3" />
+        <!-- Only when the runner reads recorded steps at all: fixes off records as it always has. -->
+        <p v-if="live.heal && live.heal.mode !== 'off'" class="mt-1 text-[12.5px] leading-relaxed text-ink-2">
+          {{ live.heal.mode === 'ai' && live.heal.ai?.available && live.heal.ai?.enabled
+            ? 'Each step is read as you record it: the AI says what it did, and flags a step that looks like a recording mistake.'
+            : 'Each step is checked as you record it, and a step that looks like a recording mistake is flagged.' }}
+        </p>
+        <FlowBox :model-value="live.recordedFlow" :notes="live.recordNotes" :rows="8" readonly class="mt-3"
+                 @fix="live.fixRecordedStep($event)" />
         <div class="mt-3 flex gap-2">
           <button class="rounded-full border border-hairline px-3 py-1.5 text-[12.5px]" @click="useRecording">
             Use as script
@@ -972,6 +995,32 @@ watch(() => live.recordedFlow, (f) => {
               <span v-if="s.fixes?.length"
                     class="ml-1.5 inline-flex rounded bg-warn/10 px-1 align-[1px] font-sans text-[10.5px] font-medium text-warn"
                     :title="`${s.fixes.length} automatic fix${s.fixes.length === 1 ? '' : 'es'} on this step`">fixed</span>
+              <span v-if="s.error" class="block whitespace-pre-wrap text-ink-2">{{ s.error }}</span>
+              <!-- How the step was worked out (reasoning.js): what the runner saw,
+                   the rules it tried, what the AI noticed, ruled out and decided,
+                   what was checked and what was done — or, for a check that
+                   failed, the AI's why. Open while the step runs and once it
+                   fails; folded to its answer once it passes. Text only: the words
+                   are the page's and the model's, redacted by the runner. -->
+              <div v-if="s.trace?.length" class="mt-1 font-sans">
+                <button type="button" class="flex w-full min-w-0 items-baseline gap-1.5 rounded text-left text-[12px] text-ink-2 hover:text-ink"
+                        :aria-expanded="traceOpen(s, traceFolds)" @click="toggleTrace(s)">
+                  <span class="w-2.5 shrink-0 text-ink-3" aria-hidden="true">{{ traceOpen(s, traceFolds) ? '▾' : '▸' }}</span>
+                  <span v-if="byAi(s.trace)" class="shrink-0 rounded bg-brand-50 px-1 text-[10.5px] font-medium text-brand-2">AI</span>
+                  <span class="shrink-0 font-medium">{{ traceHeading(s.trace) }}</span>
+                  <span v-if="!traceOpen(s, traceFolds)" class="min-w-0 truncate text-ink-3">· {{ traceSummary(s.trace) }}</span>
+                </button>
+                <ol v-if="traceOpen(s, traceFolds)" class="mb-1 ml-1 mt-1 space-y-0.5 border-l border-hairline pl-2.5">
+                  <li v-for="(e, k) in s.trace" :key="k" class="flex gap-2 text-[12px] leading-snug">
+                    <span class="w-[4.5rem] shrink-0 pt-px text-[10.5px] font-medium uppercase tracking-wide"
+                          :class="e.tier === 'ai' ? 'text-brand-2' : e.tier === 'rule' ? 'text-warn' : 'text-ink-3'">{{ entryLabel(e.kind) }}</span>
+                    <span class="min-w-0 break-words" :class="e.kind === 'why' ? 'font-medium text-ink' : e.kind === 'advice' ? 'text-ink' : 'text-ink-2'">
+                      <span v-if="e.ok === true" class="text-good">✓ </span><span v-else-if="e.ok === false" class="text-critical">✕ </span>{{ e.text }}<template v-if="e.detail">{{ ' ' }}<span class="text-ink-3">— “{{ e.detail }}”</span></template>
+                      <span v-for="c in entryChips(e)" :key="c" class="ml-1.5 inline-flex rounded bg-ink/[0.06] px-1 align-[1px] text-[10.5px] text-ink-2">{{ c }}</span>
+                    </span>
+                  </li>
+                </ol>
+              </div>
               <!-- The runner asking the AI about this step, said as it goes:
                    reading, deciding, checking. Quiet on purpose — it is a wait,
                    not a result. The region is there for the whole time the step
@@ -988,7 +1037,6 @@ watch(() => live.recordedFlow, (f) => {
                   <span class="shrink-0 tabular-nums text-ink-3" aria-hidden="true">{{ elapsedLabel(s.thinking.since, thinkingNow) }}</span>
                 </span>
               </span>
-              <span v-if="s.error" class="block whitespace-pre-wrap text-ink-2">{{ s.error }}</span>
               <template v-for="(f, k) in s.fixes ?? []" :key="k">
                 <button type="button"
                         class="mt-0.5 flex w-full items-baseline gap-1.5 rounded text-left font-sans text-[12px] text-ink-2 hover:text-ink"
