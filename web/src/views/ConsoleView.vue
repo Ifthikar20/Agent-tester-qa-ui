@@ -75,10 +75,29 @@ async function open() {
   if (!urlBox.value.trim()) return;
   live.needsOrigin = null;
   opening.value = urlBox.value.trim();
+  live.home = opening.value;            // the page opened on purpose: what Home reopens
   live.painted = false;                 // show the loading state for the new page
   live.send({ t: 'open', url: opening.value });
 }
 watch(() => live.painted, (p) => { if (p) opening.value = null; });
+
+/**
+ * Back and Home. A sign-in that bounces to another origin used to leave no
+ * way back: Open reopens whatever is in the box, and the box follows the
+ * address only on arrival. Back is the browser's own history, offered only
+ * when the runner says there is a page behind this one; Home reopens the page
+ * last opened on purpose — else the ?url= this console was opened with, else
+ * the suite's own address — through the same gate as Open.
+ */
+const homeUrl = computed(() => live.home
+  ?? (route.query.url ? String(route.query.url) : null)
+  ?? suite.value?.baseUrl ?? suite.value?.origin ?? null);
+const goBack = () => live.send({ t: 'human.back' });
+function goHome() {
+  if (!homeUrl.value) return;
+  urlBox.value = homeUrl.value;
+  open();
+}
 
 // The console stays mounted when you move between suites, so a new ?url= has
 // to be acted on — otherwise the second suite's Console button appears to do
@@ -275,6 +294,10 @@ watch(() => live.recordedFlow, (f) => {
       <Stage :opening="opening" />
 
       <div class="mt-3 flex flex-wrap items-center gap-2">
+        <Btn variant="ghost" :disabled="!live.back || live.running"
+             :title="live.back ? 'Back to the page before this one' : 'Nothing to go back to'" @click="goBack">Back</Btn>
+        <Btn variant="ghost" :disabled="!homeUrl"
+             :title="homeUrl ? `Reopen ${homeUrl}` : 'Nothing has been opened from here yet'" @click="goHome">Home</Btn>
         <input v-model="urlBox" spellcheck="false" aria-label="URL to open"
                placeholder="staging.acme.com/dashboard"
                class="min-w-0 flex-1 rounded-full border border-hairline bg-panel px-4 py-2 text-[13.5px] outline-none focus:border-ink/25"
@@ -288,7 +311,8 @@ watch(() => live.recordedFlow, (f) => {
 
       <p class="mt-2 text-[12.5px] text-ink-3">
         Point at the page above and use your wheel or trackpad to scroll it — or the buttons.
-        Clicking and typing there go to the page you are driving, never to this one.
+        Clicking and typing there go to the page you are driving, never to this one. Back is the
+        browser's own; Home reopens the page you last opened.
       </p>
 
       <UpgradePrompt v-if="live.upgrade" class="mt-3" :limit="live.upgrade.limit" :plan="live.upgrade.plan" @dismiss="live.upgrade = null" />

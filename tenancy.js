@@ -37,6 +37,7 @@ import * as history from './runs.js';
 import * as suites from './suites.js';
 import * as monitors from './monitor.js';
 import * as support from './support.js';
+import * as chat from './chat.js';
 
 export { LOCAL, isOrg };
 
@@ -63,6 +64,7 @@ export function workspace(org) {
       suites: suites.forOrg(org),
       monitors: monitors.forOrg(org),
       support: support.forOrg(org),
+      chat: chat.forOrg(org),
     };
     spaces.set(org, space);
   }

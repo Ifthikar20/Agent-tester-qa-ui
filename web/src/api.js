@@ -4,13 +4,15 @@
  * Every call funnels through `req`, which turns a non-2xx into a thrown Error
  * carrying the server's own message — so a view can `catch (e) { this.error =
  * e.message }` and show the same words the server chose, rather than "Request
- * failed". Five statuses are worth naming on the error object, because each
+ * failed". Seven statuses are worth naming on the error object, because each
  * is the app asking a person for something rather than reporting a fault: a
  * 409 with `needsOrigin` wants a decision, a 409 `runner_busy` wants patience
  * (another organisation has the browser), a 403 `step_up_required` wants a
- * fresh sign-in, a 403 `forbidden` wants an owner or admin, and a 402
- * `entitlement` wants a bigger plan. The view offers the right button — or
- * the right sentence — instead of a red box.
+ * fresh sign-in, a 403 `forbidden` wants an owner or admin, a 402
+ * `entitlement` wants a bigger plan, a 409 `chat_busy` wants the reply being
+ * written to finish, and a 403 `switched_off` wants nothing at all — the
+ * operator turned the feature off. The view offers the right button — or the
+ * right sentence — instead of a red box.
  *
  * Every path goes through `apiUrl`, which is the identity function while the
  * backend serves this app and a real origin once it does not. Writing the
@@ -56,6 +58,19 @@ async function req(path, { method = 'GET', body } = {}) {
       err.busy = { org: data.org ?? null };
       err.message = 'Another organisation is driving the runner right now — try again when it is free';
     }
+    // One reply at a time per organisation (the chat): the runner names the
+    // turn it is writing, and the page waits for that rather than retrying.
+    if (res.status === 409 && data.error === 'chat_busy') {
+      err.chatBusy = { turnId: data.turnId ?? null, conversationId: data.conversationId ?? null };
+      err.message = 'A reply is still being written — wait for it to finish';
+    }
+    // The operator turned this off for the whole deployment: no plan and no
+    // role would change the answer, so a view says so rather than offering a
+    // retry. `switchedOff` names the switch, e.g. 'runner.chat'.
+    if (res.status === 403 && data.error === 'switched_off') {
+      err.switchedOff = data.switch ?? null;
+      err.message = data.message || `${data.switch ?? 'This'} is turned off on this deployment`;
+    }
     // Origins and the vault are an owner's or admin's to change.
     if (res.status === 403 && data.error === 'forbidden') {
       err.forbidden = true;
@@ -99,7 +114,6 @@ export const api = {
   // A 30-second, single-use ticket the socket is opened with, so the token
   // itself never goes into a URL (docs/AUTH.md §9).
   socketTicket: () => req('/api/socket-ticket', { method: 'POST' }),
-  version: () => req('/api/version'),
   runs:    (suite) => req(`/api/runs${suite ? `?suite=${encodeURIComponent(suite)}` : ''}`),
   defects: () => req('/api/defects'),
   hero:    () => req('/api/hero'),
@@ -143,6 +157,9 @@ export const api = {
   // suite whose origin the monitored page is on).
   monitors:        (suite) => req(`/api/monitors${suite ? `?suite=${encodeURIComponent(suite)}` : ''}`),
   createMonitor:   (body) => req('/api/monitors', { method: 'POST', body }),
+  // The checks a rule would compile to, before the monitor exists — the
+  // script shown under the sentence as it is typed. Nothing is kept.
+  previewMonitor:  (body) => req('/api/monitors/preview', { method: 'POST', body }),
   removeMonitor:   (id) => req(`/api/monitors/${id}`, { method: 'DELETE' }),
   pauseMonitor:    (id) => req(`/api/monitors/${id}/pause`, { method: 'POST' }),
   resumeMonitor:   (id) => req(`/api/monitors/${id}/resume`, { method: 'POST' }),
@@ -159,4 +176,14 @@ export const api = {
   support:        () => req('/api/support'),
   requestSupport: (body) => req('/api/support/request', { method: 'POST', body }),
   disableSupport: () => req('/api/support/access', { method: 'DELETE' }),
+
+  // Chat: a conversation with the runner about what it knows (stores/chat.js).
+  // A turn is a 202 — the reply is written on the socket as chat.* events,
+  // because an answer that runs a case takes as long as the case does. An
+  // older runner has none of these routes and answers 404, which the store
+  // reads as "not offered" rather than as a fault.
+  chat:             () => req('/api/chat'),
+  chatConversation: (id) => req(`/api/chat/${encodeURIComponent(id)}`),
+  chatTurn:         (body) => req('/api/chat/turns', { method: 'POST', body }),
+  deleteChat:       (id) => req(`/api/chat/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 };

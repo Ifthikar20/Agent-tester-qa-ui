@@ -22,6 +22,7 @@ import { defineStore } from 'pinia';
 import { hasAuth, wsUrl } from '@/config';
 import { api } from '@/api';
 import { useSession } from '@/stores/session';
+import { useChatStore } from '@/stores/chat';
 
 const MAX_LOG = 200;
 /** Incidents kept in memory; the runner keeps the same number on disk. */
@@ -44,6 +45,8 @@ export const useLive = defineStore('live', {
   state: () => ({
     connected: false,
     url: null,
+    back: false,        // whether the driven page has a page behind it — the runner says, per navigation
+    home: null,         // the page last opened on purpose from a view; what Home reopens
     origins: [],
     secrets: [],        // filled by a `secrets` reply, never by the greeting
     org: null,          // which organisation this socket is, as the runner sees it
@@ -103,8 +106,10 @@ export const useLive = defineStore('live', {
     monitors: [],       // PublicMonitor, newest first
     incidents: [],      // Incident, newest first, capped
     picking: false,     // the runner's picker is armed on the page
-    picked: null,       // { selector, fingerprint, snapshot, label, url } from monitor.selected
+    picked: null,       // { selector, fingerprint, snapshot, label, url, readError, shot } from monitor.selected (+ monitor.shot)
     pickError: null,    // a sentence for the Pick button, from a refusal
+    hover: null,        // { describe, tag, text, w, h, fontSize }: what the picker is over, while picking
+    pickMiss: null,     // a sentence: the last click while picking chose nothing (an iframe, say)
     monitoring: null,   // the /api/monitoring summary: { llm, budget, counts, picking }
     /**
      * Help & support (support.js): whether support access is on for this
@@ -198,6 +203,10 @@ export const useLive = defineStore('live', {
         this.backoff = RECONNECT_MIN_MS;    // a clean open earns a fast retry next time
         // A reconnect starts with no picture, and the page may be idle.
         this.send({ t: 'frame.request' });
+        // A chat reply that landed while this socket was down is on the
+        // runner, not here: the chat store re-reads its list and whatever
+        // conversation it has open (stores/chat.js refresh).
+        useChatStore().refresh();
       };
       ws.onclose = (e) => {
         this.connected = false;
@@ -206,6 +215,9 @@ export const useLive = defineStore('live', {
         // Nor whether the picker is armed on a page we cannot see.
         this.picking = false;
         this.pickError = null;
+        this.hover = null;
+        this.pickMiss = null;
+        this.back = false;
         if (this.ws === ws) this.ws = null;
         // 4401 is the runner closing the socket because the token that
         // bought its ticket has expired. The token is spent; forget it so
@@ -259,6 +271,8 @@ export const useLive = defineStore('live', {
       this.running = false;
       this.picking = false;
       this.pickError = null;
+      this.hover = null;
+      this.pickMiss = null;
     },
 
     send(msg) {
@@ -339,9 +353,10 @@ export const useLive = defineStore('live', {
           this.url = ev.url; this.origins = ev.origins;
           // Another organisation's socket (an org switch reconnects with a
           // new ticket): its monitors are not ours to show.
-          if (this.org && ev.org && this.org !== ev.org) { this.monitors = []; this.incidents = []; this.picked = null; this.monitoring = null; }
+          if (this.org && ev.org && this.org !== ev.org) { this.monitors = []; this.incidents = []; this.picked = null; this.monitoring = null; this.home = null; }
           this.org = ev.org ?? null;
           if ('picking' in ev) this.picking = !!ev.picking;
+          this.back = !!ev.back;
           if (ev.url === null) this.picked = null;
           if (ev.driving) this.driving = ev.driving;
           if (ev.url === null) { this.targets = []; this.lastFrame = null; this.painted = false; }
@@ -356,13 +371,16 @@ export const useLive = defineStore('live', {
         // and the last picture rather than keep showing them.
         case 'driving':
           this.driving = { org: ev.org ?? null, held: !!ev.held, mine: !!ev.mine };
-          if (!ev.mine) { this.url = null; this.targets = []; this.lastFrame = null; this.painted = false; this.running = false; this.picking = false; this.picked = null; }
+          if (!ev.mine) { this.url = null; this.targets = []; this.lastFrame = null; this.painted = false; this.running = false; this.picking = false; this.picked = null; this.hover = null; this.pickMiss = null; this.back = false; }
           break;
         case 'origins': this.origins = ev.origins; break;
         case 'secrets': this.secrets = ev.secrets; break;
         // Cheap and immediate; `targets` carries the same URL but arrives
         // after discovery, which is far too late for an address bar.
         case 'url': this.url = ev.url; break;
+        // Whether Back has somewhere to go, decided by the runner from the
+        // browser's own history on every navigation.
+        case 'history': this.back = !!ev.back; break;
         case 'targets': this.url = ev.url; this.targets = ev.items; break;
         case 'cursor': this.cursor = { x: ev.x, y: ev.y }; break;
         case 'press': this.ripple++; break;
@@ -438,10 +456,30 @@ export const useLive = defineStore('live', {
           break;
         // Agentic monitoring: the runner's monitors and incidents, mirrored.
         case 'support': this.support = { enabled: !!ev.enabled, since: ev.since ?? null }; break;
-        case 'monitor.pick': this.picking = !!ev.on; if (ev.on) this.pickError = null; break;
+        case 'monitor.pick':
+          this.picking = !!ev.on;
+          if (ev.on) { this.pickError = null; this.pickMiss = null; } else this.hover = null;
+          break;
+        // What the pointer is over, in words: the runner's picker says so on
+        // every hover, and the panel names it beside the crosshair.
+        case 'monitor.hover':
+          if (this.picking) this.hover = { describe: ev.describe ?? '', tag: ev.tag ?? '', text: ev.text ?? '', w: ev.w ?? 0, h: ev.h ?? 0, fontSize: ev.fontSize ?? '' };
+          break;
+        case 'monitor.pick.miss': this.pickMiss = ev.msg || 'That click chose nothing.'; break;
         case 'monitor.selected':
           this.picking = false;
-          this.picked = { selector: ev.selector, fingerprint: ev.fingerprint ?? null, snapshot: ev.snapshot ?? null, label: ev.label ?? '', url: ev.url ?? this.url };
+          this.hover = null;
+          this.pickMiss = null;
+          this.picked = {
+            selector: ev.selector, fingerprint: ev.fingerprint ?? null, snapshot: ev.snapshot ?? null, label: ev.label ?? '',
+            url: ev.url ?? this.url, readError: ev.readError ?? null, shot: null,
+          };
+          break;
+        // The clip of the picked element, a moment after the pick. Set in
+        // place, so the view's watch on `picked` — which resets the rule box —
+        // does not run again for a picture.
+        case 'monitor.shot':
+          if (this.picked && this.picked.selector === ev.selector && ev.shot) this.picked.shot = ev.shot;
           break;
         case 'monitor.tick': {
           // Only the numbers; the rest of the card is the monitor's, which arrives whole as monitor.changed.
@@ -457,6 +495,11 @@ export const useLive = defineStore('live', {
           this.upsertIncident(ev.incident);
           break;
         case 'log': this.say(ev.msg, ev.level); break;
+        // The chat's events are the chat store's, whole (stores/chat.js): the
+        // turn accepted, the words as they stream, each tool call, the reply
+        // as it was kept. One socket, so they arrive here first.
+        default:
+          if (typeof ev.t === 'string' && ev.t.startsWith('chat.')) useChatStore().handle(ev);
       }
     },
   },

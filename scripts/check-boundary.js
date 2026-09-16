@@ -105,11 +105,19 @@ const assetDir = join(outDir, 'assets');
 if (existsSync(assetDir)) {
   const present = new Set(readdirSync(assetDir));
   const reached = new Set();
+  /**
+   * A chunk names the assets it loads, and not all of them are chunks: the
+   * named icons (web/src/icons) are emitted PNGs whose URLs appear in the chunk
+   * that imports them. So anything under assets/ counts as reached — `@`
+   * included in the name, because rollup keeps it in `[name]` and
+   * `suite@2x-Ab12Cd.png` would otherwise read as an orphan — and only .js and
+   * .css are opened, being the only two that can name something in turn.
+   */
   const follow = (text) => {
-    for (const m of text.matchAll(/assets\/([A-Za-z0-9._-]+\.(?:js|css))/g)) {
+    for (const m of text.matchAll(/assets\/([A-Za-z0-9._@-]+\.[A-Za-z0-9]+)/g)) {
       if (present.has(m[1]) && !reached.has(m[1])) {
         reached.add(m[1]);
-        follow(readFileSync(join(assetDir, m[1]), 'utf8'));
+        if (/\.(?:js|css)$/.test(m[1])) follow(readFileSync(join(assetDir, m[1]), 'utf8'));
       }
     }
   };
