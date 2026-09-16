@@ -36,6 +36,7 @@ const routes = [
   { path: '/console', name: 'console', component: () => import('@/views/ConsoleView.vue') },
   // Watch an element on the driven page against a rule in plain English.
   { path: '/monitoring', name: 'monitoring', component: () => import('@/views/MonitoringView.vue') },
+  { path: '/chat', name: 'chat', component: () => import('@/views/ChatView.vue') },
   { path: '/settings', name: 'settings', component: () => import('@/views/SettingsView.vue') },
   // The organisation you act for (docs/AUTH.md §10): members, roles,
   // invitations, the plan and how much of it the runner counts as used.

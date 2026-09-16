@@ -206,6 +206,7 @@ async function open() {
   if (!urlBox.value.trim()) return;
   live.needsOrigin = null;
   opening.value = urlBox.value.trim();
+  live.home = opening.value;            // the console's Home reopens it too
   live.painted = false;
   live.send({ t: 'open', url: opening.value });
 }

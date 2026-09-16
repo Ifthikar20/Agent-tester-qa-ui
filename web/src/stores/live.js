@@ -22,6 +22,7 @@ import { defineStore } from 'pinia';
 import { hasAuth, wsUrl } from '@/config';
 import { api } from '@/api';
 import { useSession } from '@/stores/session';
+import { useChatStore } from '@/stores/chat';
 
 const MAX_LOG = 200;
 /** Incidents kept in memory; the runner keeps the same number on disk. */
@@ -44,6 +45,8 @@ export const useLive = defineStore('live', {
   state: () => ({
     connected: false,
     url: null,
+    back: false,        // whether the driven page has a page behind it — the runner says, per navigation
+    home: null,         // the page last opened on purpose from a view; what Home reopens
     origins: [],
     secrets: [],        // filled by a `secrets` reply, never by the greeting
     org: null,          // which organisation this socket is, as the runner sees it
@@ -200,6 +203,10 @@ export const useLive = defineStore('live', {
         this.backoff = RECONNECT_MIN_MS;    // a clean open earns a fast retry next time
         // A reconnect starts with no picture, and the page may be idle.
         this.send({ t: 'frame.request' });
+        // A chat reply that landed while this socket was down is on the
+        // runner, not here: the chat store re-reads its list and whatever
+        // conversation it has open (stores/chat.js refresh).
+        useChatStore().refresh();
       };
       ws.onclose = (e) => {
         this.connected = false;
@@ -210,6 +217,7 @@ export const useLive = defineStore('live', {
         this.pickError = null;
         this.hover = null;
         this.pickMiss = null;
+        this.back = false;
         if (this.ws === ws) this.ws = null;
         // 4401 is the runner closing the socket because the token that
         // bought its ticket has expired. The token is spent; forget it so
@@ -345,9 +353,10 @@ export const useLive = defineStore('live', {
           this.url = ev.url; this.origins = ev.origins;
           // Another organisation's socket (an org switch reconnects with a
           // new ticket): its monitors are not ours to show.
-          if (this.org && ev.org && this.org !== ev.org) { this.monitors = []; this.incidents = []; this.picked = null; this.monitoring = null; }
+          if (this.org && ev.org && this.org !== ev.org) { this.monitors = []; this.incidents = []; this.picked = null; this.monitoring = null; this.home = null; }
           this.org = ev.org ?? null;
           if ('picking' in ev) this.picking = !!ev.picking;
+          this.back = !!ev.back;
           if (ev.url === null) this.picked = null;
           if (ev.driving) this.driving = ev.driving;
           if (ev.url === null) { this.targets = []; this.lastFrame = null; this.painted = false; }
@@ -362,13 +371,16 @@ export const useLive = defineStore('live', {
         // and the last picture rather than keep showing them.
         case 'driving':
           this.driving = { org: ev.org ?? null, held: !!ev.held, mine: !!ev.mine };
-          if (!ev.mine) { this.url = null; this.targets = []; this.lastFrame = null; this.painted = false; this.running = false; this.picking = false; this.picked = null; this.hover = null; this.pickMiss = null; }
+          if (!ev.mine) { this.url = null; this.targets = []; this.lastFrame = null; this.painted = false; this.running = false; this.picking = false; this.picked = null; this.hover = null; this.pickMiss = null; this.back = false; }
           break;
         case 'origins': this.origins = ev.origins; break;
         case 'secrets': this.secrets = ev.secrets; break;
         // Cheap and immediate; `targets` carries the same URL but arrives
         // after discovery, which is far too late for an address bar.
         case 'url': this.url = ev.url; break;
+        // Whether Back has somewhere to go, decided by the runner from the
+        // browser's own history on every navigation.
+        case 'history': this.back = !!ev.back; break;
         case 'targets': this.url = ev.url; this.targets = ev.items; break;
         case 'cursor': this.cursor = { x: ev.x, y: ev.y }; break;
         case 'press': this.ripple++; break;
@@ -483,6 +495,11 @@ export const useLive = defineStore('live', {
           this.upsertIncident(ev.incident);
           break;
         case 'log': this.say(ev.msg, ev.level); break;
+        // The chat's events are the chat store's, whole (stores/chat.js): the
+        // turn accepted, the words as they stream, each tool call, the reply
+        // as it was kept. One socket, so they arrive here first.
+        default:
+          if (typeof ev.t === 'string' && ev.t.startsWith('chat.')) useChatStore().handle(ev);
       }
     },
   },

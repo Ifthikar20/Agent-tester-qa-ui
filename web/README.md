@@ -66,6 +66,7 @@ src/
     session.js   who you are, and the short-lived token the runner takes
   views/         one per route
   components/    the small shared pieces
+  icons/         PNG icons by name, plus the line-art fallbacks (see icons/README.md)
   lang/          a CHECKED COPY of the backend's vocabulary.js — do not edit
                  here; edit the original and run `npm run sync:lang`
 ```

@@ -18,7 +18,12 @@ import { useSuites } from '@/stores/suites';
 import { useLive } from '@/stores/live';
 import { useSession } from '@/stores/session';
 import { useUi } from '@/stores/ui';
+import { useChatStore } from '@/stores/chat';
 import SiteIcon from '@/components/SiteIcon.vue';
+// The nav's glyphs are named rather than drawn here: src/icons resolves each
+// name to the designer's PNG if one has been dropped in and to line art if not,
+// so redrawing this sidebar is a file, not an edit. See src/icons/README.md.
+import Icon from '@/components/Icon.vue';
 
 const route = useRoute();
 const router = useRouter();
@@ -26,6 +31,7 @@ const suites = useSuites();
 const live = useLive();
 const session = useSession();
 const ui = useUi();
+const chat = useChatStore();
 
 /**
  * Collapsed is a 64px RAIL, not zero width.
@@ -90,24 +96,6 @@ const SECTIONS = [
 ];
 const sectionLink = (x, s) => (x.query ? { name: x.to, query: { suite: s.id } } : { name: x.to, params: { id: s.id } });
 const sectionOn = (x, s) => (x.query ? route.name === x.to && route.query.suite === s.id : route.name === x.to);
-
-/**
- * 16px line icons, drawn inline rather than pulled from a font.
- *
- * A whole icon library is 40kB to render eight glyphs, and every one of them
- * would still need aria-hiding — the label beside it is the accessible name,
- * and a second copy of it read aloud is noise.
- */
-const ICONS = {
-  suite:   'M3 5.5h10M3 8h10M3 10.5h6',
-  history: 'M8 4.2v4l2.6 1.6M2.6 8a5.4 5.4 0 1 0 1.6-3.8',
-  console: 'M2.5 3.5h11v9h-11zM5 7l1.8 1.6L5 10.2M8.8 10.4h2.6',
-  defects: 'M8 2.6 14.2 13H1.8zM8 6.4v3.1M8 11.3v.5',
-  settings:'M8 5.9a2.1 2.1 0 1 0 0 4.2 2.1 2.1 0 0 0 0-4.2M8 2.3l1 1.5 1.8-.3.5 1.7 1.6.8-.6 1.7.9 1.6-1.4 1.1v1.8l-1.8.2-1 1.5L8 13l-1 .9-1-1.5-1.8-.2v-1.8L2.8 9.3l.9-1.6-.6-1.7 1.6-.8.5-1.7L7 3.8z',
-  security:'M8 2.2 3.2 4v4c0 2.9 2 5 4.8 5.8 2.8-.8 4.8-2.9 4.8-5.8V4zM6 8l1.4 1.4L10.2 6.6',
-  org:     'M5.5 7.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM10.5 7.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM2 13c0-2 1.6-3.3 3.5-3.3S9 11 9 13M7.5 13c0-2 1.3-3.3 3-3.3S14 11 14 13',
-  monitor: 'M1.5 8.5h2.8l1.6-4.2 2.4 7.4 2-5 1.3 1.8h3',
-};
 </script>
 
 <template>
@@ -244,26 +232,17 @@ const ICONS = {
       <div v-else class="mx-2 mt-6 mb-2 border-t border-hairline" />
       <RouterLink to="/dashboard" class="nav-item hover:bg-ink/[0.04] hover:text-ink" active-class="nav-item-on"
                   :class="rail && 'nav-item-rail'" :title="rail ? 'Run history' : null" :aria-label="rail ? 'Run history' : null">
-        <svg viewBox="0 0 16 16" class="size-4 shrink-0" fill="none" stroke="currentColor"
-             stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path :d="ICONS.history" />
-        </svg>
+        <Icon name="history" class="size-4 shrink-0" />
         <span v-if="!rail">Run history</span>
       </RouterLink>
       <RouterLink to="/defects" class="nav-item hover:bg-ink/[0.04] hover:text-ink" active-class="nav-item-on"
                   :class="rail && 'nav-item-rail'" :title="rail ? 'Defects' : null" :aria-label="rail ? 'Defects' : null">
-        <svg viewBox="0 0 16 16" class="size-4 shrink-0" fill="none" stroke="currentColor"
-             stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path :d="ICONS.defects" />
-        </svg>
+        <Icon name="defects" class="size-4 shrink-0" />
         <span v-if="!rail">Defects</span>
       </RouterLink>
       <RouterLink to="/console" class="nav-item relative hover:bg-ink/[0.04] hover:text-ink" active-class="nav-item-on"
                   :class="rail && 'nav-item-rail'" :title="rail ? 'Console' : null" :aria-label="rail ? 'Console' : null">
-        <svg viewBox="0 0 16 16" class="size-4 shrink-0" fill="none" stroke="currentColor"
-             stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path :d="ICONS.console" />
-        </svg>
+        <Icon name="console" class="size-4 shrink-0" />
         <span v-if="!rail">Console</span>
         <span v-if="live.recording" :class="rail ? 'absolute right-1 top-1 size-1.5' : 'ml-auto size-1.5'" class="animate-pulse rounded-full bg-critical" title="recording" />
         <span v-else-if="live.running" :class="rail ? 'absolute right-1 top-1 size-1.5' : 'ml-auto size-1.5'" class="animate-pulse rounded-full bg-brand" title="running" />
@@ -275,39 +254,39 @@ const ICONS = {
       <RouterLink to="/monitoring" class="nav-item relative hover:bg-ink/[0.04] hover:text-ink"
                   :class="[rail && 'nav-item-rail', route.name === 'monitoring' && !route.query.suite && 'nav-item-on']"
                   :title="rail ? 'Agentic monitoring' : null" :aria-label="rail ? 'Agentic monitoring' : null">
-        <svg viewBox="0 0 16 16" class="size-4 shrink-0" fill="none" stroke="currentColor"
-             stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path :d="ICONS.monitor" />
-        </svg>
+        <Icon name="monitor" class="size-4 shrink-0" />
         <span v-if="!rail">Agentic monitoring</span>
         <span v-if="live.openIncidents" :class="rail ? 'absolute right-1 top-1 size-1.5' : 'ml-auto size-1.5'" class="rounded-full bg-critical"
               :title="`${live.openIncidents} open incident${live.openIncidents === 1 ? '' : 's'}`" />
+      </RouterLink>
+      <!-- Ask the thing questions in words, rather than reading its output. It
+           sits with the rest of the general pages because a conversation is
+           about whatever you are looking at, not about one suite. -->
+      <RouterLink to="/chat" class="nav-item relative hover:bg-ink/[0.04] hover:text-ink" active-class="nav-item-on"
+                  :class="rail && 'nav-item-rail'" :title="rail ? 'Chat' : null" :aria-label="rail ? 'Chat' : null">
+        <Icon name="chat" class="size-4 shrink-0" />
+        <span v-if="!rail">Chat</span>
+        <!-- A reply being written is activity, so it pulses like the console's
+             running dot — and for the runner's turn in flight, whoever asked. -->
+        <span v-if="chat.turn || chat.busy" :class="rail ? 'absolute right-1 top-1 size-1.5' : 'ml-auto size-1.5'"
+              class="animate-pulse rounded-full bg-brand" title="a reply is being written" />
       </RouterLink>
 
       <p v-if="!rail" class="eyebrow px-2 pb-2 pt-6">Admin</p>
       <div v-else class="mx-2 mt-6 mb-2 border-t border-hairline" />
       <RouterLink to="/settings" class="nav-item hover:bg-ink/[0.04] hover:text-ink" active-class="nav-item-on"
                   :class="rail && 'nav-item-rail'" :title="rail ? 'Origins &amp; vault' : null" :aria-label="rail ? 'Origins &amp; vault' : null">
-        <svg viewBox="0 0 16 16" class="size-4 shrink-0" fill="none" stroke="currentColor"
-             stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path :d="ICONS.settings" />
-        </svg>
+        <Icon name="settings" class="size-4 shrink-0" />
         <span v-if="!rail">Origins &amp; vault</span>
       </RouterLink>
       <RouterLink v-if="session.required" to="/organisation" class="nav-item hover:bg-ink/[0.04] hover:text-ink" active-class="nav-item-on">
-        <svg viewBox="0 0 16 16" class="size-4 shrink-0" fill="none" stroke="currentColor"
-             stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path :d="ICONS.org" />
-        </svg>
+        <Icon name="org" class="size-4 shrink-0" />
         Organisation
       </RouterLink>
       <!-- The account's own settings exist only when there is an account:
            with no control plane there is no password to change. -->
       <RouterLink v-if="session.required" to="/security" class="nav-item hover:bg-ink/[0.04] hover:text-ink" active-class="nav-item-on">
-        <svg viewBox="0 0 16 16" class="size-4 shrink-0" fill="none" stroke="currentColor"
-             stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path :d="ICONS.security" />
-        </svg>
+        <Icon name="security" class="size-4 shrink-0" />
         Security
       </RouterLink>
     </nav>

@@ -34,6 +34,14 @@ export default defineConfig({
     // this directory (GC_WEB_DIR) instead of the build reaching into it.
     outDir: fileURLToPath(new URL('./dist', import.meta.url)),
     emptyOutDir: true,
+    // The named icons (src/icons) stay files. Small PNGs are under the inline
+    // threshold, and inlined they are base64 in the main chunk — so every
+    // viewer downloads the light AND the dark AND both retina variants of every
+    // icon before the first paint, to look at one of them. As files the browser
+    // fetches the one the theme and the screen actually ask for, and each is
+    // hashed and cached on its own. `undefined` elsewhere leaves vite's default
+    // rule alone.
+    assetsInlineLimit: (file) => (/[\\/]icons[\\/]/.test(file) ? false : undefined),
   },
   resolve: {
     alias: {
