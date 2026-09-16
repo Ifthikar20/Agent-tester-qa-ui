@@ -25,12 +25,7 @@ const match = (rows) => rows.filter((r) => (r.suite ?? '').toLowerCase().include
 </script>
 
 <template>
-  <TopBar :crumbs="[{ label: 'Run history' }]">
-    <template #actions>
-      <input v-model="filter" placeholder="Filter suites"
-             class="w-56 rounded-full border border-hairline bg-panel px-4 py-1.5 text-[13px] outline-none focus:border-ink/25">
-    </template>
-  </TopBar>
+  <TopBar :crumbs="[{ label: 'Run history' }]" />
 
   <div class="mx-auto max-w-6xl px-6 py-8">
     <HeroPanel seed="dashboard">
@@ -92,9 +87,14 @@ const match = (rows) => rows.filter((r) => (r.suite ?? '').toLowerCase().include
       </div>
 
       <section class="card mb-5 overflow-hidden">
-        <div class="flex items-baseline gap-3 px-5 pt-5">
+        <!-- The filter lives with the tables it narrows, not in the top bar:
+             it is this report's control, and the bar is for what every page
+             shares. It narrows the Latest table below as well. -->
+        <div class="flex flex-wrap items-center gap-3 px-5 pt-5">
           <h2 class="text-[15px] font-medium">By suite</h2>
           <span class="text-[13px] text-ink-3">Newest first.</span>
+          <input v-model="filter" placeholder="Filter suites" aria-label="Filter suites"
+                 class="ml-auto w-52 rounded-full border border-hairline bg-panel px-3.5 py-1 text-[12.5px] outline-none focus:border-ink/25">
         </div>
         <table class="mt-3 w-full text-[13.5px]">
           <thead class="border-y border-hairline text-left">

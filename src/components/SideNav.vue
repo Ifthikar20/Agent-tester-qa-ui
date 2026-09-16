@@ -72,17 +72,28 @@ const runnerDot = computed(() => (live.busy ? 'bg-warn' : live.connected ? 'bg-g
 
 const initial = computed(() => (session.org?.name ?? 'Local').slice(0, 1).toUpperCase());
 
-const openId = computed(() => route.params.id ?? null);
+// The suite a page is about: its own pages carry the id in the path; the
+// console and monitoring opened on a suite carry it as ?suite=.
+const openId = computed(() => route.params.id ?? (route.query.suite ? String(route.query.suite) : null));
 
 const version = ref(null);
-onMounted(async () => { version.value = await api.version().catch(() => null); });
+onMounted(async () => {
+  // The open-incident dot has to be right before the monitoring page has been
+  // visited, so the sidebar asks for the one thing only it draws.
+  live.loadOpenIncidents();
+  version.value = await api.version().catch(() => null);
+});
 
 const SECTIONS = [
   { to: 'suite',       label: 'Overview' },
   { to: 'suite-pages', label: 'Pages' },
   { to: 'suite-cases', label: 'Cases' },
   { to: 'suite-runs',  label: 'Runs' },
+  // Monitoring is one page for every project, told which one by ?suite=.
+  { to: 'monitoring',  label: 'Monitoring', query: true },
 ];
+const sectionLink = (x, s) => (x.query ? { name: x.to, query: { suite: s.id } } : { name: x.to, params: { id: s.id } });
+const sectionOn = (x, s) => (x.query ? route.name === x.to && route.query.suite === s.id : route.name === x.to);
 
 /**
  * 16px line icons, drawn inline rather than pulled from a font.
@@ -100,6 +111,7 @@ const ICONS = {
   security:'M8 2.2 3.2 4v4c0 2.9 2 5 4.8 5.8 2.8-.8 4.8-2.9 4.8-5.8V4zM6 8l1.4 1.4L10.2 6.6',
   org:     'M5.5 7.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM10.5 7.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM2 13c0-2 1.6-3.3 3.5-3.3S9 11 9 13M7.5 13c0-2 1.3-3.3 3-3.3S14 11 14 13',
   profile: 'M8 7.8a2.6 2.6 0 1 0 0-5.2 2.6 2.6 0 0 0 0 5.2M2.8 13.8c.5-2.6 2.7-4.2 5.2-4.2s4.7 1.6 5.2 4.2',
+  monitor: 'M1.5 8.5h2.8l1.6-4.2 2.4 7.4 2-5 1.3 1.8h3',
 };
 </script>
 
@@ -130,6 +142,23 @@ const ICONS = {
            fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M9.5 4.5 6 8l3.5 3.5" />
       </svg>
+    </button>
+
+    <!-- The collapse control, at the top where a hand goes looking for it.
+         The mark above toggles too; both call the same action, so there is
+         nothing to keep in sync. -->
+    <button type="button" @click="ui.toggleNav()"
+            :title="rail ? 'Expand the sidebar' : 'Collapse the sidebar'"
+            :aria-label="rail ? 'Expand the sidebar' : 'Collapse the sidebar'"
+            :aria-expanded="!rail"
+            class="nav-item mb-3 hover:bg-ink/[0.04] hover:text-ink"
+            :class="rail ? 'nav-item-rail mx-2' : 'mx-3'">
+      <svg viewBox="0 0 16 16" class="size-4 shrink-0" fill="none" stroke="currentColor"
+           stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M2.5 3h11v10h-11zM6 3v10" />
+        <path :d="rail ? 'M9 6.5 10.5 8 9 9.5' : 'M10.5 6.5 9 8l1.5 1.5'" />
+      </svg>
+      <span v-if="!rail">Collapse</span>
     </button>
 
     <!-- Workspace: the organisation you act for (docs/AUTH.md §10) — every
@@ -202,12 +231,19 @@ const ICONS = {
              `text-brand-2` are both plain text utilities, so which one wins is
              decided by stylesheet order, not by the order they are written
              here — the selected section came out grey. -->
-        <div v-if="openId === s.id && !rail" class="mb-1 ml-[1.9rem]">
-          <RouterLink v-for="x in SECTIONS" :key="x.to" :to="{ name: x.to, params: { id: s.id } }"
-            class="block rounded-lg px-2.5 py-1.5 text-[12.5px]"
-            :class="route.name === x.to
-              ? 'bg-brand-50 font-medium text-brand-2'
-              : 'text-ink-3 hover:bg-ink/[0.04] hover:text-ink'">
+        <!-- A line runs down from the suite's mark and the section names line
+             up with the suite's name, so the four read as its children rather
+             than as four more suites set a little to the right. The open one
+             colours its stretch of the line instead of wearing a second pill
+             under the suite's own. -->
+        <div v-if="openId === s.id && !rail" class="mb-1.5 ml-[1.05rem] mt-0.5 border-l border-hairline pl-[7px]">
+          <RouterLink v-for="x in SECTIONS" :key="x.to" :to="sectionLink(x, s)"
+            class="relative block rounded-md px-2.5 py-1.5 text-[12.5px] leading-5
+                   before:absolute before:bottom-1.5 before:top-1.5 before:w-0.5 before:rounded-full
+                   before:left-[-8.3px] before:content-['']"
+            :class="sectionOn(x, s)
+              ? 'font-medium text-brand-2 before:bg-brand'
+              : 'text-ink-3 before:bg-transparent hover:bg-ink/[0.04] hover:text-ink'">
             {{ x.label }}
           </RouterLink>
         </div>
@@ -240,6 +276,21 @@ const ICONS = {
         <span v-if="!rail">Console</span>
         <span v-if="live.recording" :class="rail ? 'absolute right-1 top-1 size-1.5' : 'ml-auto size-1.5'" class="animate-pulse rounded-full bg-critical" title="recording" />
         <span v-else-if="live.running" :class="rail ? 'absolute right-1 top-1 size-1.5' : 'ml-auto size-1.5'" class="animate-pulse rounded-full bg-brand" title="running" />
+      </RouterLink>
+      <!-- The dot is steady, not pulsing: an open incident is a state, where
+           the console's dots are activity. -->
+      <!-- Lit only for monitoring across every project: on one suite's
+           monitoring, the suite's own Monitoring section is the lit one. -->
+      <RouterLink to="/monitoring" class="nav-item relative hover:bg-ink/[0.04] hover:text-ink"
+                  :class="[rail && 'nav-item-rail', route.name === 'monitoring' && !route.query.suite && 'nav-item-on']"
+                  :title="rail ? 'Agentic monitoring' : null" :aria-label="rail ? 'Agentic monitoring' : null">
+        <svg viewBox="0 0 16 16" class="size-4 shrink-0" fill="none" stroke="currentColor"
+             stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path :d="ICONS.monitor" />
+        </svg>
+        <span v-if="!rail">Agentic monitoring</span>
+        <span v-if="live.openIncidents" :class="rail ? 'absolute right-1 top-1 size-1.5' : 'ml-auto size-1.5'" class="rounded-full bg-critical"
+              :title="`${live.openIncidents} open incident${live.openIncidents === 1 ? '' : 's'}`" />
       </RouterLink>
 
       <!-- The person: who you are, the theme, and the account's own security.
@@ -285,33 +336,33 @@ const ICONS = {
 
     <!-- Signing in with no way to sign out is a half-built feature, and on a
          shared machine it is the half that matters. Hidden entirely when no
-         control plane is configured, so the laptop case gains no dead UI. -->
-    <div v-if="session.required && session.user"
-         class="mt-3 flex items-center gap-2 rounded-xl border border-hairline bg-ground"
-         :class="rail ? 'mx-2 justify-center p-2' : 'mx-3 px-3 py-2.5'">
-      <RouterLink to="/profile" class="flex min-w-0 grow items-center gap-2 rounded-lg hover:text-ink"
-                  :class="rail && 'justify-center'"
+         control plane is configured, so the laptop case gains no dead UI.
+         Last, at the foot: it is the one thing here you press on the way out. -->
+    <div v-if="session.required && session.user" class="mb-1 mt-3" :class="rail ? 'mx-2' : 'mx-3'">
+      <!-- The card is the way to Profile & settings; the name says whose. -->
+      <RouterLink to="/profile" class="flex items-center gap-2.5 rounded-xl border border-hairline bg-ground hover:border-ink/25"
+                  :class="rail ? 'justify-center p-2' : 'px-3 py-2.5'"
                   :title="rail ? `${session.user.email} — profile & settings` : 'Profile & settings'">
         <span class="grid size-7 shrink-0 place-items-center rounded-full bg-brand-50 text-[11.5px] font-medium text-brand-2">
           {{ (session.user.name || session.user.email).slice(0, 1).toUpperCase() }}
         </span>
-        <span v-if="!rail" class="min-w-0 grow truncate text-[12px] text-ink-2">
-          {{ session.user.name || session.user.email }}
+        <span v-if="!rail" class="min-w-0 flex-1">
+          <span class="block truncate text-[12.5px] font-medium text-ink" :title="session.user.email">{{ session.user.name || session.user.email }}</span>
+          <span v-if="session.user.name" class="block truncate text-[11px] text-ink-3">{{ session.user.email }}</span>
         </span>
       </RouterLink>
-      <button v-if="!rail" class="shrink-0 rounded-lg px-2 py-1 text-[12px] text-ink-3 hover:bg-ink/[0.05] hover:text-ink"
-              @click="signOut">Sign out</button>
+      <!-- A row of its own, in words, not a grey link inside the card: it is
+           the one thing here you press on the way out. In the rail the words
+           go and the icon stays — signing out must never become unreachable. -->
+      <button type="button" @click="signOut" title="Sign out" aria-label="Sign out"
+              class="nav-item mt-1 w-full hover:bg-ink/[0.04] hover:text-ink" :class="rail && 'nav-item-rail'">
+        <svg viewBox="0 0 16 16" class="size-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M6 13.5H3.5v-11H6M10 11l3-3-3-3M13 8H6.5" />
+        </svg>
+        <span v-if="!rail">Sign out</span>
+      </button>
     </div>
-    <!-- In the rail the words do not fit, but signing out must not become
-         unreachable — it is the half of auth that matters on a shared machine. -->
-    <button v-if="session.required && session.user && rail" @click="signOut"
-            title="Sign out" aria-label="Sign out"
-            class="mx-2 mt-2 grid place-items-center rounded-lg py-2 text-ink-3 hover:bg-ink/[0.05] hover:text-ink">
-      <svg viewBox="0 0 16 16" class="size-4" fill="none" stroke="currentColor" stroke-width="1.5"
-           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M6 13.5H3.5v-11H6M10 11l3-3-3-3M13 8H6.5" />
-      </svg>
-    </button>
 
     <div v-if="!rail" class="m-3 rounded-xl border border-hairline bg-ground p-3 text-[12px] leading-relaxed text-ink-2">
       <p class="font-medium text-ink">Suites are project data</p>

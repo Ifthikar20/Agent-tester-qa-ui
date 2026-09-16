@@ -40,7 +40,12 @@
  * test/theme.test.js holds both palettes to the contrast promised here.
  */
 @theme {
-  --font-display: ui-sans-serif, -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
+  /* Inter for everything, the system sans behind it: one friendly sans at every
+     size, rather than the platform's own UI face pretending to be a headline.
+     Bundled from @fontsource (src/main.js), not fetched from Google — the
+     runner serves this app under default-src 'self', which would refuse it. */
+  --font-display: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 
   --color-ground:     #fbfbfc;
   --color-panel:      #ffffff;

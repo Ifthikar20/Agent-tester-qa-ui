@@ -53,6 +53,9 @@ export const useUi = defineStore('ui', {
     systemDark: (() => {
       try { return window.matchMedia(DARK_QUERY).matches; } catch { return false; }
     })(),
+    /** The help panel and the support sheet, opened from any page's top bar. */
+    helpOpen: false,
+    supportOpen: false,
   }),
 
   getters: {
@@ -106,5 +109,10 @@ export const useUi = defineStore('ui', {
       this.theme = parseChoice(choice);
       try { localStorage.setItem(THEME_KEY, this.theme); } catch { /* private window */ }
     },
+
+    openHelp() { this.supportOpen = false; this.helpOpen = true; },
+    closeHelp() { this.helpOpen = false; },
+    openSupport() { this.helpOpen = false; this.supportOpen = true; },
+    closeSupport() { this.supportOpen = false; },
   },
 });

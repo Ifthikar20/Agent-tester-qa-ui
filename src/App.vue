@@ -2,6 +2,8 @@
 import { computed, onBeforeUnmount, onMounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import SideNav from '@/components/SideNav.vue';
+import HelpPanel from '@/components/HelpPanel.vue';
+import SupportSheet from '@/components/SupportSheet.vue';
 import { useLive } from '@/stores/live';
 import { useSuites } from '@/stores/suites';
 import { useSession } from '@/stores/session';
@@ -47,6 +49,7 @@ watch(() => [session.signedIn, session.mustChangePassword, session.mfa.required 
   if (!yes || locked || unenrolled) return void live.disconnect();
   live.connect();
   suites.loadList();
+  live.loadSupport();
 }, { immediate: true });
 
 // The sidebar shows case counts, so it has to notice when a suite gains one.
@@ -114,6 +117,10 @@ onBeforeUnmount(() => {
     <main class="flex-1 overflow-y-auto">
       <RouterView />
     </main>
+    <!-- Help and support open over whichever page you were on, from the top
+         bar of every page, so they are drawn once here rather than per view. -->
+    <HelpPanel v-if="ui.helpOpen" />
+    <SupportSheet v-if="ui.supportOpen" />
   </div>
   <RouterView v-else />
 </template>

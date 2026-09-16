@@ -3,6 +3,8 @@ import { computed, ref, watch } from 'vue';
 import { api } from '@/api';
 import { useSuites } from '@/stores/suites';
 import { useLive } from '@/stores/live';
+import { incidentPill, stateTone } from '@/monitoring';
+import { when } from '@/time';
 import HeroPanel from '@/components/HeroPanel.vue';
 import StatTile from '@/components/StatTile.vue';
 import StatusPill from '@/components/StatusPill.vue';
@@ -26,6 +28,37 @@ const runs = ref(null);
 const load = async (id) => { runs.value = id ? await api.runs(id).catch(() => null) : null; };
 watch(() => suite.value?.id, load, { immediate: true });
 watch(() => live.running, (now, before) => { if (before && !now) load(suite.value?.id); });
+
+/**
+ * What agentic monitoring watches on this project, and what it found. The
+ * runner draws the line (monitor.js belongs): a monitor made from this suite,
+ * or made with no project on a page of this suite's origin. Re-read whenever
+ * the socket says a monitor or an incident changed, so a break shows up here
+ * without a refresh.
+ */
+const watching = ref(null);   // { monitors, incidents }, or null until the runner answers
+const loadWatching = async (id) => {
+  if (!id) { watching.value = null; return; }
+  try {
+    const [m, i] = await Promise.all([api.monitors(id), api.incidents(null, id)]);
+    if (suite.value?.id === id) watching.value = { monitors: m.monitors ?? [], incidents: i.incidents ?? [] };
+  } catch { watching.value = null; }
+};
+watch(() => suite.value?.id, loadWatching, { immediate: true });
+watch(
+  () => [live.monitors.length, live.incidents.length, live.openIncidents, live.monitors.map((m) => m.state).join()],
+  () => loadWatching(suite.value?.id),
+);
+const openIssues = computed(() => watching.value?.incidents.filter((i) => i.status === 'open').length ?? 0);
+const monitorNote = computed(() => {
+  if (!watching.value) return '';
+  if (!watching.value.monitors.length) return 'nothing watched yet';
+  return openIssues.value ? `${openIssues.value} open issue${openIssues.value === 1 ? '' : 's'}` : 'nothing open';
+});
+const monitoringLink = computed(() => ({
+  path: '/monitoring',
+  query: { suite: suite.value.id, url: suite.value.pages[0]?.url ?? suite.value.baseUrl },
+}));
 
 const rate = computed(() => {
   const p = runs.value?.totals.passRate;
@@ -61,11 +94,12 @@ async function allow() {
       </button>
     </div>
 
-    <div class="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    <div class="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
       <StatTile label="Pages" :value="suite.pages.length" :note="`${scanned} scanned`" />
       <StatTile label="Expectations" :value="expectations" note="assertions on load" />
       <StatTile label="Cases" :value="suite.cases.length" :note="`${suite.cases.filter(c => c.source === 'recorded').length} recorded`" />
       <StatTile label="Pass rate" :value="rate" :note="runs ? `${runs.totals.week} runs this week` : ''" />
+      <StatTile label="Monitors" :value="watching ? watching.monitors.length : '—'" :note="monitorNote" />
     </div>
 
     <div class="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-2">
@@ -97,6 +131,59 @@ async function allow() {
         </ul>
         <EmptyState v-else class="mt-3" title="Nothing has run yet"
                     body="Add a case, then press Run suite." />
+      </section>
+
+      <!-- Agentic monitoring on this project: what is watched, and what
+           broke its rule. The evidence — clips, numbers, verdict — is on the
+           monitoring page; this is the count and the list. -->
+      <section class="card p-5 lg:col-span-2">
+        <div class="flex flex-wrap items-baseline gap-3">
+          <h2 class="text-[15px] font-medium">Monitoring</h2>
+          <span v-if="watching" class="text-[12.5px] text-ink-3">
+            {{ watching.monitors.length }} monitor{{ watching.monitors.length === 1 ? '' : 's' }} ·
+            {{ watching.incidents.length }} issue{{ watching.incidents.length === 1 ? '' : 's' }} found
+          </span>
+          <RouterLink :to="monitoringLink" class="ml-auto rounded-full border border-hairline px-3.5 py-1.5 text-[13px] hover:border-ink/25">
+            Open monitoring
+          </RouterLink>
+        </div>
+
+        <EmptyState v-if="!watching?.monitors.length" class="mt-3" title="Nothing is watched yet"
+                    body="Open monitoring on this project, pick an element on one of its pages, and say what must stay true. Every change to the page is checked against it, and whatever breaks the rule lands here.">
+          <RouterLink :to="monitoringLink" class="rounded-full bg-brand px-4 py-2 text-[13.5px] font-medium text-white hover:bg-brand-deep">
+            Watch an element
+          </RouterLink>
+        </EmptyState>
+
+        <div v-else class="mt-3 grid gap-5 md:grid-cols-2">
+          <div>
+            <p class="eyebrow mb-1.5">Watching</p>
+            <ul class="divide-y divide-hairline border-y border-hairline">
+              <li v-for="m in watching.monitors" :key="m.id" class="flex items-center gap-3 py-2.5">
+                <div class="min-w-0 flex-1">
+                  <p class="truncate text-[13.5px]" :title="m.selector">{{ m.label }}</p>
+                  <p class="truncate text-[11.5px] italic text-ink-3">“{{ m.ruleText }}”</p>
+                </div>
+                <span class="shrink-0 rounded-full px-2 py-0.5 text-[11.5px] font-medium" :class="stateTone(m.state)">{{ m.state }}</span>
+              </li>
+            </ul>
+          </div>
+          <div>
+            <p class="eyebrow mb-1.5">Issues found</p>
+            <ul v-if="watching.incidents.length" class="divide-y divide-hairline border-y border-hairline">
+              <li v-for="inc in watching.incidents.slice(0, 8)" :key="inc.id" class="flex items-center gap-3 py-2.5">
+                <div class="min-w-0 flex-1">
+                  <p class="truncate text-[13.5px]">
+                    {{ inc.monitorLabel }}<span class="text-ink-3"> · {{ inc.violations?.[0]?.message ?? inc.type }}</span>
+                  </p>
+                  <p class="truncate text-[11.5px] text-ink-3">{{ when(inc.openedAt) }}</p>
+                </div>
+                <span class="shrink-0 rounded-full px-2 py-0.5 text-[11.5px] font-medium" :class="incidentPill(inc).tone">{{ incidentPill(inc).label }}</span>
+              </li>
+            </ul>
+            <p v-else class="text-[13px] text-ink-3">Nothing has broken its rule.</p>
+          </div>
+        </div>
       </section>
     </div>
   </div>

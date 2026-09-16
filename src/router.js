@@ -37,6 +37,8 @@ const routes = [
   // into a ticket is a link straight to it.
   { path: '/defects/:id?', name: 'defects', component: () => import('@/views/DefectsView.vue'), props: true },
   { path: '/console', name: 'console', component: () => import('@/views/ConsoleView.vue') },
+  // Watch an element on the driven page against a rule in plain English.
+  { path: '/monitoring', name: 'monitoring', component: () => import('@/views/MonitoringView.vue') },
   { path: '/settings', name: 'settings', component: () => import('@/views/SettingsView.vue') },
   // Who you are here, and the one setting that is the person's rather than
   // the account's or the organisation's: light or dark. Renders with no

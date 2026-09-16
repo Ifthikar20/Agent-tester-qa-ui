@@ -28,16 +28,25 @@ import { api } from '@/api';
 import { aiLockedReason, modeLabel } from '@/fixes';
 import { useLive } from '@/stores/live';
 import { useSession } from '@/stores/session';
+import { useUi } from '@/stores/ui';
 import { useGuarded } from '@/composables/reauth';
 import { setTracing, traceId, tracing } from '@/trace';
+import { LABEL } from '@/theme';
 import TopBar from '@/components/TopBar.vue';
 import Field from '@/components/Field.vue';
 import ReauthSheet from '@/components/ReauthSheet.vue';
 import UpgradePrompt from '@/components/UpgradePrompt.vue';
+import ThemeSwitch from '@/components/ThemeSwitch.vue';
 
 const live = useLive();
 const session = useSession();
+const ui = useUi();
 const guard = useGuarded();
+
+/** How this browser draws the app, in the words the switch uses. */
+const themeChoice = computed(() => (ui.theme === 'system'
+  ? `Following this device, which is ${ui.dark ? 'dark' : 'light'} now.`
+  : `Always ${LABEL[ui.theme].toLowerCase()}, whatever this device prefers.`));
 const draft = ref('');
 const error = ref(null);
 const upgrade = ref(null);
@@ -229,6 +238,20 @@ function toggleTracing() {
         </button>
       </div>
       <p v-if="healError" class="mt-3 rounded-lg border border-critical/25 bg-critical/5 px-3 py-2 text-[12.5px] text-critical">{{ healError }}</p>
+    </section>
+
+    <!-- The one setting that is the person's, not the organisation's: how this
+         browser draws the app. Remembered here, never on the server. -->
+    <section class="card mb-4 p-5">
+      <h2 class="text-[15px] font-medium">Appearance</h2>
+      <p class="mt-1.5 max-w-xl text-[13px] leading-relaxed text-ink-2">
+        Light, dark, or whatever this device prefers. Remembered by this browser, not by the
+        account, so a shared runner never changes it for anyone else.
+      </p>
+      <div class="mt-4 max-w-xs">
+        <ThemeSwitch />
+      </div>
+      <p class="mt-3 text-[12.5px] text-ink-3">{{ themeChoice }}</p>
     </section>
 
     <section v-if="state" class="card p-5">

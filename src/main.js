@@ -2,6 +2,13 @@ import { createApp } from 'vue';
 import { createPinia } from 'pinia';
 import App from './App.vue';
 import router from './router';
+// Inter, the app's one typeface (app.css --font-display): bundled, because the
+// runner's CSP allows nothing from another origin. The landing page imports
+// the same files, so the two share them.
+import '@fontsource/inter/latin-400.css';
+import '@fontsource/inter/latin-500.css';
+import '@fontsource/inter/latin-600.css';
+import '@fontsource/inter/latin-700.css';
 import './app.css';
 
 // Pinia before the router: the navigation guard calls useSession(), which
