@@ -124,6 +124,9 @@ export const api = {
   version: () => req('/api/version'),
   runs:    (suite) => req(`/api/runs${suite ? `?suite=${encodeURIComponent(suite)}` : ''}`),
   defects: () => req('/api/defects'),
+  defect:  (id) => req(`/api/defects/${encodeURIComponent(id)}`),
+  // Assignee, severity or resolution: an owner's or admin's (docs/AUTH.md §10).
+  triageDefect: (id, body) => req(`/api/defects/${encodeURIComponent(id)}`, { method: 'PATCH', body }),
   hero:    () => req('/api/hero'),
   siteIcon: (origin) => bytes(`/api/sites/icon?origin=${encodeURIComponent(origin)}`),
 

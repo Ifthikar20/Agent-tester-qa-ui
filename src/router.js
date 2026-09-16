@@ -32,7 +32,9 @@ const routes = [
       { path: 'runs', name: 'suite-runs', component: () => import('@/views/SuiteRuns.vue') },
     ],
   },
-  { path: '/defects', name: 'defects', component: () => import('@/views/DefectsView.vue') },
+  // /defects/DEF-2609-007 opens that defect over the list, so a number pasted
+  // into a ticket is a link straight to it.
+  { path: '/defects/:id?', name: 'defects', component: () => import('@/views/DefectsView.vue'), props: true },
   { path: '/console', name: 'console', component: () => import('@/views/ConsoleView.vue') },
   { path: '/settings', name: 'settings', component: () => import('@/views/SettingsView.vue') },
   // The organisation you act for (docs/AUTH.md §10): members, roles,

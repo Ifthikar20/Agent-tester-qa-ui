@@ -113,7 +113,7 @@ watch(() => live.run?.steps.map((s) => s.state).join(), () => {
 }, { flush: 'post' });
 
 /**
- * The Browser console tab: everything the driven page printed and everything
+ * The Log tab: everything the driven page printed and everything
  * the runner said while driving it, as one live stream — filtered the way
  * DevTools filters, by level, by where a line came from, and by its text.
  *
@@ -481,7 +481,6 @@ const fold = (rows, same) => {
   }
   return out;
 };
-const logLines = computed(() => fold(live.log, (a, b) => a.msg === b.msg && a.level === b.level));
 
 /** Reopening the same page four times is one fact, not four. */
 const navLines = computed(() => fold(live.navs, (a, b) =>
@@ -720,20 +719,8 @@ watch(() => live.recordedFlow, (f) => {
 
     <!-- rail --------------------------------------------------------- -->
     <div class="grid content-start grid-cols-[minmax(0,1fr)] gap-4">
-      <!-- First in the rail. It is where anything that went wrong says so, and
-           it should not be below a list of everything that did not. -->
-      <section class="card p-5">
-        <h2 class="text-[15px] font-medium">Log</h2>
-        <ul class="mt-3 max-h-64 space-y-1 overflow-y-auto font-mono text-[11.5px]">
-          <li v-for="l in logLines" :key="l.id" class="flex gap-2"
-              :class="{ error: 'text-critical', warn: 'text-warn' }[l.level] ?? 'text-ink-2'">
-            <span class="min-w-0 grow">{{ l.msg }}</span>
-            <span v-if="l.n > 1" class="shrink-0 rounded bg-ink/[0.07] px-1.5 text-[10.5px] text-ink-2"
-                  :title="`said ${l.n} times in a row`">×{{ l.n }}</span>
-          </li>
-          <li v-if="!logLines.length" class="text-ink-3">Nothing yet.</li>
-        </ul>
-      </section>
+      <!-- No log card in the rail: the log is the Log tab in the dock along the
+           bottom, where the runner's lines and the page's are one filterable list. -->
 
       <section v-if="live.recording || live.recordedCount" class="card p-5">
         <div class="flex items-center gap-2">
@@ -870,7 +857,7 @@ watch(() => live.recordedFlow, (f) => {
                 class="flex items-center gap-2 whitespace-nowrap border-b-2 px-2.5 py-2.5 text-[13px]"
                 :class="ui.dockOpen && ui.dockTab === 'console' ? 'border-brand font-medium text-ink' : 'border-transparent text-ink-3 hover:text-ink'"
                 @click="ui.showDock('console')">
-          Browser console
+          Log
           <span v-if="logErrors" class="rounded-full bg-critical/10 px-1.5 py-px text-[11px] font-medium tabular-nums text-critical"
                 :title="`${logErrors} error${logErrors === 1 ? '' : 's'}`">{{ logErrors }}</span>
           <span v-else-if="logRows.length" class="text-[11.5px] tabular-nums text-ink-3">{{ logRows.length }}</span>
