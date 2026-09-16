@@ -99,7 +99,6 @@ export const api = {
   // A 30-second, single-use ticket the socket is opened with, so the token
   // itself never goes into a URL (docs/AUTH.md §9).
   socketTicket: () => req('/api/socket-ticket', { method: 'POST' }),
-  version: () => req('/api/version'),
   runs:    (suite) => req(`/api/runs${suite ? `?suite=${encodeURIComponent(suite)}` : ''}`),
   defects: () => req('/api/defects'),
   hero:    () => req('/api/hero'),
@@ -143,6 +142,9 @@ export const api = {
   // suite whose origin the monitored page is on).
   monitors:        (suite) => req(`/api/monitors${suite ? `?suite=${encodeURIComponent(suite)}` : ''}`),
   createMonitor:   (body) => req('/api/monitors', { method: 'POST', body }),
+  // The checks a rule would compile to, before the monitor exists — the
+  // script shown under the sentence as it is typed. Nothing is kept.
+  previewMonitor:  (body) => req('/api/monitors/preview', { method: 'POST', body }),
   removeMonitor:   (id) => req(`/api/monitors/${id}`, { method: 'DELETE' }),
   pauseMonitor:    (id) => req(`/api/monitors/${id}/pause`, { method: 'POST' }),
   resumeMonitor:   (id) => req(`/api/monitors/${id}/resume`, { method: 'POST' }),

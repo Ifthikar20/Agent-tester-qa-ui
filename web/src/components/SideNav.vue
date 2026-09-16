@@ -19,7 +19,6 @@ import { useLive } from '@/stores/live';
 import { useSession } from '@/stores/session';
 import { useUi } from '@/stores/ui';
 import SiteIcon from '@/components/SiteIcon.vue';
-import { api } from '@/api';
 
 const route = useRoute();
 const router = useRouter();
@@ -75,12 +74,10 @@ const initial = computed(() => (session.org?.name ?? 'Local').slice(0, 1).toUppe
 // console and monitoring opened on a suite carry it as ?suite=.
 const openId = computed(() => route.params.id ?? (route.query.suite ? String(route.query.suite) : null));
 
-const version = ref(null);
-onMounted(async () => {
+onMounted(() => {
   // The open-incident dot has to be right before the monitoring page has been
   // visited, so the sidebar asks for the one thing only it draws.
   live.loadOpenIncidents();
-  version.value = await api.version().catch(() => null);
 });
 
 const SECTIONS = [
@@ -343,13 +340,5 @@ const ICONS = {
         <span v-if="!rail">Sign out</span>
       </button>
     </div>
-
-    <!-- What is actually running, in one quiet line. "Am I on the latest?"
-         should be answerable by looking, not by remembering whether you pulled
-         and rebuilt. -->
-    <p v-if="version && !rail" class="mx-3 mb-3 mt-1 truncate font-mono text-[10.5px] text-ink-3"
-       :title="`commit ${version.commit ?? 'unknown'} · ui built ${version.built ?? 'never'}`">
-      {{ version.commit ?? 'no git' }} · ui {{ version.built ? version.built.replace('T', ' ').slice(5, 16) : 'not built' }}
-    </p>
   </aside>
 </template>

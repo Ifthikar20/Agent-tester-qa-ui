@@ -45,6 +45,37 @@ export function suggestionsFor(snap) {
   return out;
 }
 
+/**
+ * The rule a pick starts with — the script that exists the moment the element
+ * is chosen, in the phrasing the mock compiler reads (the README's table):
+ * "nothing about it may quietly change", spelled out for this element. A
+ * table keeps its rows; anything else its size; something with readable text
+ * keeps its words. There to be edited, not invented from a blank box.
+ */
+export function defaultRule(snap) {
+  const parts = ['Must exist and always be visible'];
+  if (!snap || snap.exists === false) return parts[0];
+  if (snap.counts?.rows != null) parts.push(`must keep exactly ${snap.counts.rows} rows`);
+  else parts.push('width and height must not change');
+  if (snap.textLength > 0 && snap.textLength < 400) parts.push('text must not change');
+  return parts.join('; ');
+}
+
+/** `button.cta “Get started” · 128×34 · 14px` — what the picker is over, in one line. */
+export function hoverLine(h) {
+  if (!h) return '';
+  let s = h.describe || h.tag || 'element';
+  if (h.text) s += ` “${h.text.length > 40 ? `${h.text.slice(0, 40)}…` : h.text}”`;
+  if (h.w || h.h) s += ` · ${h.w}×${h.h}`;
+  if (h.fontSize) s += ` · ${h.fontSize}`;
+  return s;
+}
+
+/** The path of a monitored page, for "runs every time /pricing is opened". */
+export function pathOfUrl(u) {
+  try { const x = new URL(u); return (x.pathname || '/') + x.search; } catch { return u || 'this page'; }
+}
+
 /** [label, value] pairs for the facts list under a picked element. */
 export function elementFacts(snap) {
   if (!snap || snap.exists === false) return [];

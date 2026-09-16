@@ -26,7 +26,7 @@ import { NavigationLog } from './navlog.js';
 import * as monitoring from './monitor.js';
 import { MonitorAgent } from './monitor-page.js';
 import { findApiKey, createResolver, createBudget, MODEL as MONITOR_MODEL } from './monitor-resolver.js';
-import { llmModeFrom, compactSnapshot } from './monitor-rules.js';
+import { llmModeFrom, compactSnapshot, previewSpec } from './monitor-rules.js';
 import { redactWith } from './redact.js';
 
 const require = createRequire(import.meta.url);
@@ -182,6 +182,8 @@ let nav = null;
 /** The monitoring agent inside the driven page (monitor-page.js); remade with the session. */
 let monitorAgent = null;
 let monitorSync = null;
+/** The largest clip of a picked element that goes to the panel over the socket. */
+const PICK_SHOT_MAX_BYTES = 600_000;
 // Set once the browser is actually up. The port opens ~100 lines before
 // chromium.launch, so "the server answers" and "the app works" are two
 // different facts. /healthz reports this one, and a deploy waits on it.
@@ -1029,6 +1031,16 @@ app.get('/api/monitors', (req, res) => {
   try { res.json({ ok: true, monitors: monitorsOf(req).list(projectOf(req)) }); }
   catch (err) { fail(res, err, 404); }
 });
+/**
+ * The checks a rule would compile to, before a monitor exists — the script the
+ * panel shows under the sentence as it is typed, from the snapshot the pick
+ * carried. Pure: no page, no lock, no model, and nothing kept.
+ */
+app.post('/api/monitors/preview', (req, res) => {
+  const spec = previewSpec(req.body ?? {});
+  if (!spec) return res.status(400).json({ ok: false, error: 'ruleText is required' });
+  res.json({ ok: true, spec });
+});
 app.post('/api/monitors', async (req, res) => {
   if (!pageIsOurs(req, res)) return;
   try {
@@ -1301,6 +1313,23 @@ function emit(ev) {
 }
 
 /**
+ * A click while picking that chose nothing. The picker answers a click on
+ * the page's own elements within milliseconds; one that lands inside an
+ * <iframe> never reaches it — the events stay in the frame's document, where
+ * the agent is not installed — and the person is left in "picking" wondering
+ * why nothing happened. Said once per such click, to the one who clicked.
+ */
+function missedPick(org, urlBefore) {
+  setTimeout(() => {
+    if (!monitorAgent?.picking || currentUrl() !== urlBefore) return;
+    emitTo(org, {
+      t: 'monitor.pick.miss',
+      msg: 'That click chose nothing. It probably landed inside an embedded frame, which the picker cannot see — pick an element of the page itself.',
+    });
+  }, 700);
+}
+
+/**
  * Tell every socket where the lock stands, each in its own terms. Called
  * when the lock lapses on its own — the organisation that was waiting has
  * no other way to learn the browser is free.
@@ -1515,25 +1544,58 @@ async function newSession() {
    * line.
    */
   const owner = driver.org ?? null;
+  /**
+   * Whose pick — or hover — this is: the agent's owner, or, for an agent made
+   * before anyone was driving, whoever is driving now. A pick with nobody to
+   * tell is said in the log rather than dropped: from the panel, a dropped
+   * pick looks like a click that did nothing.
+   */
+  const pickerOrg = () => agent.owner ?? driver.org ?? null;
   const agent = new MonitorAgent(page, {
     owner,
     listFor: (href) => (agent.owner ? tenancy.workspace(agent.owner).monitors.monitorsForPage(href) : []),
     onReport: (r) => { if (agent.owner) tenancy.workspace(agent.owner).monitors.ingest(r); },
-    onSelected: (info) => {
-      if (!agent.owner) return;
-      if (info && !info.cancelled && info.selector) {
-        const engine = tenancy.workspace(agent.owner).monitors;
-        const snapshot = engine.cleanSnapshot(compactSnapshot(info.snapshot));
-        emitTo(agent.owner, {
-          t: 'monitor.selected',
-          selector: String(info.selector).slice(0, monitoring.SELECTOR_MAX),
-          fingerprint: info.fingerprint ?? null,
-          snapshot,
-          label: engine.redact(String(info.label ?? '')).slice(0, monitoring.LABEL_MAX),
-          url: info.url ?? currentUrl(),
-        });
+    onVisit: (href, list) => { if (agent.owner && list.length) tenancy.workspace(agent.owner).monitors.visited(href, list.map((m) => m.id)); },
+    // What the pointer is over, in words, so the panel can say it while the
+    // person is still choosing. Page text, so redacted like a snapshot's.
+    onHover: (h) => {
+      const org = pickerOrg();
+      if (!org || !h) return;
+      const engine = tenancy.workspace(org).monitors;
+      emitTo(org, {
+        t: 'monitor.hover',
+        describe: String(h.describe ?? '').slice(0, 120), tag: String(h.tag ?? '').slice(0, 40),
+        text: engine.redact(String(h.text ?? '')).slice(0, 60),
+        w: Number(h.w) || 0, h: Number(h.h) || 0, fontSize: String(h.fontSize ?? '').slice(0, 20),
+      });
+    },
+    onSelected: async (info) => {
+      const org = pickerOrg();
+      if (!org) return void console.error('  monitoring: an element was picked but nobody is driving — the pick was dropped');
+      if (!(info && !info.cancelled && info.selector)) return void emitTo(org, { t: 'monitor.pick', on: false });
+      const engine = tenancy.workspace(org).monitors;
+      const snapshot = engine.cleanSnapshot(compactSnapshot(info.snapshot));
+      const selector = String(info.selector).slice(0, monitoring.SELECTOR_MAX);
+      const fingerprint = info.fingerprint ?? null;
+      emitTo(org, {
+        t: 'monitor.selected',
+        selector,
+        fingerprint,
+        snapshot,
+        label: engine.redact(String(info.label ?? '')).slice(0, monitoring.LABEL_MAX),
+        url: info.url ?? currentUrl(),
+        // What the page could not read about it, if anything (picker.js select).
+        readError: info.readError ? String(info.readError).slice(0, 200) : null,
+      });
+      emitTo(org, { t: 'monitor.pick', on: false });
+      // A clip of what was chosen, after the answer rather than before it: the
+      // panel names the element at once and shows it a moment later. Only a
+      // clip of the element itself — the whole viewport is not "what you
+      // picked" — and only one small enough to ride the socket.
+      const shot = await agent.screenshotElement({ selector, fingerprint }, { mayScroll: false }).catch(() => null);
+      if (shot?.png && shot.kind === 'element' && shot.png.length <= PICK_SHOT_MAX_BYTES) {
+        emitTo(org, { t: 'monitor.shot', selector, shot: `data:image/png;base64,${shot.png.toString('base64')}` });
       }
-      emitTo(agent.owner, { t: 'monitor.pick', on: false });
     },
     onError: (msg) => emit({ t: 'log', level: 'error', msg: `monitoring: ${msg}` }),
   });
@@ -2027,7 +2089,13 @@ wss.on('connection', (ws) => {
     // reaches the page as genuine input events the recorder can see.
     if (!running) {
       if (m.t === 'human.move') return void cursor.moveTo(m.x, m.y);
-      if (m.t === 'human.click') return void cursor.click();
+      if (m.t === 'human.click') {
+        // While picking, a click is a choice — and one the picker never
+        // answers is worth a word (missedPick), not a silence.
+        const picking = !!monitorAgent?.picking;
+        const before = currentUrl();
+        return void cursor.click().then(() => { if (picking) missedPick(org, before); }).catch(() => {});
+      }
       if (m.t === 'human.wheel') {
         // A sanity bound, not a speed limit. The client coalesces a frame's
         // worth of wheel events into one message, so a fast flick legitimately

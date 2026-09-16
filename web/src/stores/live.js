@@ -103,8 +103,10 @@ export const useLive = defineStore('live', {
     monitors: [],       // PublicMonitor, newest first
     incidents: [],      // Incident, newest first, capped
     picking: false,     // the runner's picker is armed on the page
-    picked: null,       // { selector, fingerprint, snapshot, label, url } from monitor.selected
+    picked: null,       // { selector, fingerprint, snapshot, label, url, readError, shot } from monitor.selected (+ monitor.shot)
     pickError: null,    // a sentence for the Pick button, from a refusal
+    hover: null,        // { describe, tag, text, w, h, fontSize }: what the picker is over, while picking
+    pickMiss: null,     // a sentence: the last click while picking chose nothing (an iframe, say)
     monitoring: null,   // the /api/monitoring summary: { llm, budget, counts, picking }
     /**
      * Help & support (support.js): whether support access is on for this
@@ -206,6 +208,8 @@ export const useLive = defineStore('live', {
         // Nor whether the picker is armed on a page we cannot see.
         this.picking = false;
         this.pickError = null;
+        this.hover = null;
+        this.pickMiss = null;
         if (this.ws === ws) this.ws = null;
         // 4401 is the runner closing the socket because the token that
         // bought its ticket has expired. The token is spent; forget it so
@@ -259,6 +263,8 @@ export const useLive = defineStore('live', {
       this.running = false;
       this.picking = false;
       this.pickError = null;
+      this.hover = null;
+      this.pickMiss = null;
     },
 
     send(msg) {
@@ -356,7 +362,7 @@ export const useLive = defineStore('live', {
         // and the last picture rather than keep showing them.
         case 'driving':
           this.driving = { org: ev.org ?? null, held: !!ev.held, mine: !!ev.mine };
-          if (!ev.mine) { this.url = null; this.targets = []; this.lastFrame = null; this.painted = false; this.running = false; this.picking = false; this.picked = null; }
+          if (!ev.mine) { this.url = null; this.targets = []; this.lastFrame = null; this.painted = false; this.running = false; this.picking = false; this.picked = null; this.hover = null; this.pickMiss = null; }
           break;
         case 'origins': this.origins = ev.origins; break;
         case 'secrets': this.secrets = ev.secrets; break;
@@ -438,10 +444,30 @@ export const useLive = defineStore('live', {
           break;
         // Agentic monitoring: the runner's monitors and incidents, mirrored.
         case 'support': this.support = { enabled: !!ev.enabled, since: ev.since ?? null }; break;
-        case 'monitor.pick': this.picking = !!ev.on; if (ev.on) this.pickError = null; break;
+        case 'monitor.pick':
+          this.picking = !!ev.on;
+          if (ev.on) { this.pickError = null; this.pickMiss = null; } else this.hover = null;
+          break;
+        // What the pointer is over, in words: the runner's picker says so on
+        // every hover, and the panel names it beside the crosshair.
+        case 'monitor.hover':
+          if (this.picking) this.hover = { describe: ev.describe ?? '', tag: ev.tag ?? '', text: ev.text ?? '', w: ev.w ?? 0, h: ev.h ?? 0, fontSize: ev.fontSize ?? '' };
+          break;
+        case 'monitor.pick.miss': this.pickMiss = ev.msg || 'That click chose nothing.'; break;
         case 'monitor.selected':
           this.picking = false;
-          this.picked = { selector: ev.selector, fingerprint: ev.fingerprint ?? null, snapshot: ev.snapshot ?? null, label: ev.label ?? '', url: ev.url ?? this.url };
+          this.hover = null;
+          this.pickMiss = null;
+          this.picked = {
+            selector: ev.selector, fingerprint: ev.fingerprint ?? null, snapshot: ev.snapshot ?? null, label: ev.label ?? '',
+            url: ev.url ?? this.url, readError: ev.readError ?? null, shot: null,
+          };
+          break;
+        // The clip of the picked element, a moment after the pick. Set in
+        // place, so the view's watch on `picked` — which resets the rule box —
+        // does not run again for a picture.
+        case 'monitor.shot':
+          if (this.picked && this.picked.selector === ev.selector && ev.shot) this.picked.shot = ev.shot;
           break;
         case 'monitor.tick': {
           // Only the numbers; the rest of the card is the monitor's, which arrives whole as monitor.changed.
