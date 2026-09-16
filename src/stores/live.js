@@ -22,6 +22,10 @@ import { defineStore } from 'pinia';
 import { hasAuth, wsUrl } from '@/config';
 import { api } from '@/api';
 import { useSession } from '@/stores/session';
+import { addFix } from '@/fixes';
+import { endThinking, thinkingOn } from '@/thinking';
+import { traceOn } from '@/reasoning';
+import { fixMessage, notesOn } from '@/stepnotes';
 
 const MAX_LOG = 200;
 /** The page's console keeps more: there every line is the point, and a chatty page prints 200 in a second. */
@@ -63,13 +67,33 @@ export const useLive = defineStore('live', {
      * as ON, so a runner too old to send any turns nothing off in the UI.
      */
     switches: {},
+    /**
+     * Automatic fixes, as the runner applies them to THIS organisation:
+     * { mode: 'off'|'safe'|'ai', ai: { enabled, available, reason }, canManage }.
+     * From the greeting, and replaced whenever Settings changes the opt-in.
+     * Null until a runner that knows about fixes says so — which reads as off.
+     */
+    heal: null,
+    /**
+     * How many suggested fixes this organisation has waiting, pushed by the
+     * runner whenever that number changes. Null until the first push: not
+     * knowing is not zero, and a view that wants the list asks for it anyway.
+     */
+    fixesPending: null,
     targets: [],
     running: false,
     recording: false,
     recordedFlow: '',
     recordedCount: 0,
+    /**
+     * What the runner worked out about each recorded step (stepnotes.js), and
+     * the revision of the recording they belong to: once a step is taken out,
+     * every index after it moves, so notes from another revision are not drawn.
+     */
+    recordNotes: [],
+    recordRev: null,
     // The run in progress, as the steps report themselves.
-    run: null,          // { suite, total, steps: [{i, state, ms, error}] }
+    run: null,          // { suite, total, ok, fixed, steps: [{i, state, ms, error, fixes, thinking, trace}] }
     suiteRun: null,     // { suite, cases, done, passed }
     log: [],
     cursor: { x: 0, y: 0 },
@@ -170,6 +194,10 @@ export const useLive = defineStore('live', {
         this.connected = false;
         // We no longer know what the executor is doing; `ready` will say.
         this.running = false;
+        // Nor what it is thinking: a `done` sent while we were away never
+        // arrives, and a row saying "Working out what changed… 94s" for a run
+        // that ended during the outage is a hang that is not happening.
+        if (this.run) this.run.steps = this.run.steps.map(endThinking);
         if (this.ws === ws) this.ws = null;
         // 4401 is the runner closing the socket because the token that
         // bought its ticket has expired. The token is spent; forget it so
@@ -221,10 +249,26 @@ export const useLive = defineStore('live', {
       }
       this.connected = false;
       this.running = false;
+      this.forgetNotes();
     },
 
     send(msg) {
       if (this.ws?.readyState === 1) this.ws.send(JSON.stringify(msg));
+    },
+
+    /** Apply the fix a recorded step's note offers (stepnotes.js) — on the revision it was offered on, and no other. */
+    fixRecordedStep(note) {
+      if (note?.concern?.fix && typeof this.recordRev === 'number') this.send(fixMessage(note, this.recordRev));
+    },
+
+    /**
+     * Forget what is known about a recording's steps, and its revision, so no
+     * note is drawn beside steps it is not about — and no fix can be sent for
+     * them — until the runner says what the recording is now.
+     */
+    forgetNotes() {
+      this.recordNotes = [];
+      this.recordRev = null;
     },
 
     setPace(pace) {
@@ -268,13 +312,18 @@ export const useLive = defineStore('live', {
           this.running = !!ev.running;
           this.recording = !!ev.recording;
           this.switches = ev.switches ?? {};
+          this.heal = ev.heal ?? null;
+          // A greeting carries no revision, and a `recorded` event may have gone
+          // by while the socket was away: notes kept from before could be about
+          // other steps, or say Thinking… forever. The next `recorded` brings them.
+          this.forgetNotes();
           break;
         // The browser changed hands, or was let go. When it is no longer ours
         // the page on it is someone else's: forget the address, the targets
         // and the last picture rather than keep showing them.
         case 'driving':
           this.driving = { org: ev.org ?? null, held: !!ev.held, mine: !!ev.mine };
-          if (!ev.mine) { this.url = null; this.targets = []; this.lastFrame = null; this.painted = false; this.running = false; }
+          if (!ev.mine) { this.url = null; this.targets = []; this.lastFrame = null; this.painted = false; this.running = false; this.forgetNotes(); }
           break;
         case 'origins': this.origins = ev.origins; break;
         case 'secrets': this.secrets = ev.secrets; break;
@@ -313,10 +362,24 @@ export const useLive = defineStore('live', {
           if (this.navs.length > 25) this.navs.length = 25;
           break;
 
-        case 'record.state': this.recording = ev.on; break;
-        case 'recorded':
+        // A new recording starts with nothing known about it — with fixes off
+        // its events carry no notes at all, and the last one's must not stay.
+        case 'record.state':
+          this.recording = ev.on;
+          if (ev.on) this.forgetNotes();
+          break;
+        case 'recorded': {
           this.recordedFlow = ev.flow ?? this.recordedFlow;
           this.recordedCount = ev.count ?? this.recordedCount;
+          const next = notesOn({ rev: this.recordRev, notes: this.recordNotes }, ev);
+          this.recordRev = next.rev;
+          this.recordNotes = next.notes;
+          break;
+        }
+        // What the runner has worked out about the recording's steps since —
+        // Thinking…, a step's one line, a concern — for the revision on screen only.
+        case 'record.notes':
+          this.recordNotes = notesOn({ rev: this.recordRev, notes: this.recordNotes }, ev).notes;
           break;
 
         case 'suite.start':
@@ -332,23 +395,69 @@ export const useLive = defineStore('live', {
         case 'run.start':
           this.running = true;
           this.run = {
-            suite: ev.suite, caseName: ev.caseName ?? null, total: ev.total,
-            steps: Array.from({ length: ev.total }, (_, i) => ({ i, state: 'idle', ms: null, error: null })),
+            suite: ev.suite, caseName: ev.caseName ?? null, total: ev.total, ok: null, fixed: null,
+            steps: Array.from({ length: ev.total }, (_, i) => ({ i, state: 'idle', ms: null, error: null, fixes: [], thinking: null, trace: [] })),
           };
           break;
         case 'step.start': if (this.run) this.run.steps[ev.i] = { ...this.run.steps[ev.i], state: 'run', step: ev.step }; break;
-        case 'step.pass':  if (this.run) this.run.steps[ev.i] = { ...this.run.steps[ev.i], state: 'pass', ms: ev.ms }; break;
-        case 'step.fail':
-          if (this.run) this.run.steps[ev.i] = { ...this.run.steps[ev.i], state: 'fail', ms: ev.ms, error: ev.error };
+        /**
+         * A fix lands on its step the moment it is applied — before the step
+         * passes, because the pass is what the fix bought and the row should
+         * say how while it is still the running one. step.pass then carries
+         * the step's complete list, which wins: a fix that was tried and then
+         * superseded is not one the step needed.
+         */
+        case 'step.heal':
+          if (this.run?.steps[ev.i]) this.run.steps[ev.i] = { ...this.run.steps[ev.i], fixes: addFix(this.run.steps[ev.i].fixes, ev.fix) };
           break;
+        /**
+         * The runner is asking the AI about this step: reading the page,
+         * deciding, checking the answer. Kept on the step as { phase, text,
+         * since } for the one quiet line under its row, and cleared on `done`
+         * (thinking.js). A verdict clears it too, below — `done` always comes,
+         * but a socket that dropped it would otherwise leave a passed step
+         * still "working out what changed".
+         */
+        case 'step.thinking':
+          if (this.run?.steps[ev.i]) this.run.steps[ev.i] = thinkingOn(this.run.steps[ev.i], ev, Date.now());
+          break;
+        /**
+         * One line of how the runner is working this step out — what it saw,
+         * which rules it tried, what the AI noticed and decided, what was
+         * checked and done (reasoning.js). Kept on the step after its verdict,
+         * which carries the whole list and wins.
+         */
+        case 'step.trace':
+          if (this.run?.steps[ev.i]) this.run.steps[ev.i] = traceOn(this.run.steps[ev.i], ev);
+          break;
+        case 'step.pass':
+          if (this.run) {
+            const was = this.run.steps[ev.i];
+            this.run.steps[ev.i] = traceOn(thinkingOn({ ...was, state: 'pass', ms: ev.ms, fixes: Array.isArray(ev.fixes) ? ev.fixes : (was?.fixes ?? []) }, ev), ev);
+          }
+          break;
+        case 'step.fail':
+          if (this.run) this.run.steps[ev.i] = traceOn(thinkingOn({ ...this.run.steps[ev.i], state: 'fail', ms: ev.ms, error: ev.error }, ev), ev);
+          break;
+        // This organisation's count of suggestions waiting on a person changed.
+        case 'fixes': this.fixesPending = typeof ev.pending === 'number' ? ev.pending : this.fixesPending; break;
         case 'run.end':
           this.running = false;
+          // Kept on the run so the dock can say "Passed with 2 fixes" after the
+          // fact; a runner too old to count sends nothing, and null says so.
+          if (this.run) { this.run.ok = ev.ok ?? null; this.run.fixed = typeof ev.fixed === 'number' ? ev.fixed : null; }
+          // A run that ended is thinking about nothing, whatever its last step was told.
+          if (this.run) this.run.steps = this.run.steps.map((s) => thinkingOn(s, ev));
           if (this.suiteRun) { this.suiteRun.done++; if (ev.ok) this.suiteRun.passed++; }
           break;
 
+        // An imported flow is not the runner's recording: notes about that
+        // recording would be drawn beside these steps, and a fix pressed on one
+        // would change the recording underneath instead.
         case 'imported':
           this.recordedFlow = ev.flow;
           this.recordedCount = ev.steps;
+          this.forgetNotes();
           break;
         case 'log': this.say(ev.msg, ev.level); break;
       }

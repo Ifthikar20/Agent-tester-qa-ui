@@ -23,8 +23,9 @@
  * GC_REQUEST_LOG=sampled — one person's session, followed, with nobody
  * restarting anything and nobody else's requests in the log with it.
  */
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { api } from '@/api';
+import { aiLockedReason, modeLabel } from '@/fixes';
 import { useLive } from '@/stores/live';
 import { useSession } from '@/stores/session';
 import { useGuarded } from '@/composables/reauth';
@@ -43,7 +44,53 @@ const upgrade = ref(null);
 const state = ref(null);
 
 const refresh = async () => { state.value = await api.state(); live.secrets = state.value.secrets ?? []; };
-onMounted(refresh);
+onMounted(() => { refresh(); loadHeal(); });
+
+/**
+ * AI fixes, per organisation.
+ *
+ * The safe fixes — waiting, closing a popup, finding a renamed field — are the
+ * runner reasoning about the page it already has, and send nothing anywhere.
+ * An AI fix sends a snapshot of the page's structure to a model, so it is the
+ * organisation's decision to make, and an owner's or admin's to change. The
+ * deployment can still rule it out whatever the organisation wants: no key, the
+ * operator's switch, or a mode that does not include it — and then the toggle
+ * says which, rather than accepting a choice that will not take effect.
+ */
+const heal = ref(null);
+const healError = ref(null);
+const savingAi = ref(false);
+const aiLocked = computed(() => aiLockedReason(heal.value));
+
+async function loadHeal() {
+  try { heal.value = await api.getHealSettings(); live.heal = heal.value; }
+  catch { heal.value = live.heal; }     // a runner that predates fixes: say what the greeting said, if anything
+}
+
+async function saveAi(on) {
+  try {
+    heal.value = await api.setHealSettings(on);
+    live.heal = heal.value;             // the console's chip, without waiting for a reconnect
+    return 'ok';
+  } catch (e) {
+    // Same shape as allowing an origin, should the runner want a fresh proof.
+    if (e.stepUp) {
+      session.forgetToken();
+      await session.refresh();
+      return session.mfa.enrolled ? 'mfa_reauthenticate' : 'reauthenticate';
+    }
+    healError.value = e.message;
+    return 'error';
+  }
+}
+
+async function toggleAi() {
+  if (!heal.value || aiLocked.value || savingAi.value) return;
+  healError.value = null;
+  savingAi.value = true;
+  const want = !heal.value.ai?.enabled;
+  try { await guard.run(() => saveAi(want)); } finally { savingAi.value = false; }
+}
 
 /** Allow the drafted origin; say which proof the runner wants when it says step-up. */
 async function allow() {
@@ -92,6 +139,7 @@ const SWITCHES = {
   'runner.onboarding': 'Creating suites, pages and scans',
   'runner.origins': 'Allowing and removing origins',
   'runner.driving': 'Driving pages from the console',
+  'runner.heal': 'Automatic fixes',
 };
 
 const tracingOn = ref(tracing());
@@ -156,6 +204,31 @@ function toggleTracing() {
       <p class="mt-3 text-[12.5px] text-ink-3">
         Set in <code>.ghostclick/{{ state?.org ?? 'local' }}/secrets.json</code> on the runner<template v-if="!session.required">, or with <code>GC_SECRET_NAME=value</code></template>.
       </p>
+    </section>
+
+    <section v-if="heal" class="card mb-4 p-5">
+      <div class="flex items-start justify-between gap-4">
+        <div class="min-w-0">
+          <h2 class="text-[15px] font-medium">AI fixes for this organisation</h2>
+          <p class="mt-1.5 max-w-xl text-[13px] leading-relaxed text-ink-2">
+            When a step breaks and no safe fix mends it, the runner sends the AI a snapshot of the page’s
+            structure — its elements and their names, with typed values and secrets removed — and asks
+            which element the step meant. Nothing is sent while steps pass.
+          </p>
+          <p class="mt-2 text-[12.5px] text-ink-3">
+            On this deployment: {{ modeLabel(heal) }}.
+            <template v-if="aiLocked"> {{ aiLocked }}</template>
+          </p>
+        </div>
+        <button type="button" role="switch" :aria-checked="!!heal.ai?.enabled" aria-label="AI fixes for this organisation"
+                :disabled="!!aiLocked || savingAi" :title="aiLocked ?? undefined"
+                class="relative mt-1 h-6 w-10 shrink-0 rounded-full transition-colors disabled:opacity-50"
+                :class="heal.ai?.enabled ? 'bg-brand' : 'bg-ink/15'" @click="toggleAi">
+          <span class="absolute top-0.5 size-5 rounded-full bg-white shadow transition-[left]"
+                :class="heal.ai?.enabled ? 'left-[18px]' : 'left-0.5'" />
+        </button>
+      </div>
+      <p v-if="healError" class="mt-3 rounded-lg border border-critical/25 bg-critical/5 px-3 py-2 text-[12.5px] text-critical">{{ healError }}</p>
     </section>
 
     <section v-if="state" class="card p-5">

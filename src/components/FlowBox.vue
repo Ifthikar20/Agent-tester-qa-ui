@@ -21,8 +21,14 @@ import FlowLegend from '@/components/FlowLegend.vue';
 import { readFlow } from '@/readflow';
 import { paintHtml } from '@/flowcolors';
 
-const props = defineProps({ modelValue: String, rows: { type: Number, default: 10 }, readonly: Boolean });
-defineEmits(['update:modelValue']);
+const props = defineProps({
+  modelValue: String,
+  rows: { type: Number, default: 10 },
+  readonly: Boolean,
+  /** What the runner worked out about each recorded step (FlowRead, stepnotes.js). Read-only views only. */
+  notes: { type: Array, default: () => [] },
+});
+defineEmits(['update:modelValue', 'fix']);
 
 const reading = ref(false);
 const read = computed(() => readFlow(props.modelValue));
@@ -49,7 +55,7 @@ function follow(e) {
 </script>
 
 <template>
-  <FlowRead v-if="readonly" :flow="modelValue" :rows="rows" />
+  <FlowRead v-if="readonly" :flow="modelValue" :rows="rows" :notes="notes" @fix="$emit('fix', $event)" />
   <div v-else>
     <div class="mb-1.5 flex justify-end">
       <div class="flex overflow-hidden rounded-full border border-hairline text-[12px]" role="group" aria-label="Show the script as">

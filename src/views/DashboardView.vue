@@ -1,6 +1,7 @@
 <script setup>
 import { onMounted, ref } from 'vue';
 import { api } from '@/api';
+import { fixesTitle, runVerdict } from '@/fixes';
 import HeroPanel from '@/components/HeroPanel.vue';
 import TopBar from '@/components/TopBar.vue';
 import RunsChart from '@/components/RunsChart.vue';
@@ -112,7 +113,9 @@ const match = (rows) => rows.filter((r) => (r.suite ?? '').toLowerCase().include
               </td>
               <td class="px-3 py-3 text-ink-2">{{ when(s.last.at) }}</td>
               <td class="px-3 py-3 tabular-nums text-ink-2">{{ Math.round(s.passed / s.runs * 100) }}% of {{ s.runs }}</td>
-              <td class="px-5 py-3 text-right"><StatusPill :ok="s.last.ok" size="sm" /></td>
+              <td class="px-5 py-3 text-right">
+                <StatusPill :ok="s.last.ok" :fixed="runVerdict(s.last) === 'fixed'" :title="s.last.ok ? fixesTitle(s.last) : undefined" size="sm" />
+              </td>
             </tr>
           </tbody>
         </table>
@@ -143,7 +146,10 @@ const match = (rows) => rows.filter((r) => (r.suite ?? '').toLowerCase().include
                 {{ r.ok ? r.total : `${r.passed} of ${r.total}, stopped at ${r.step + 1}` }}
               </td>
               <td class="px-3 py-3 tabular-nums text-ink-2">{{ dur(r.ms) }}</td>
-              <td class="px-5 py-3 text-right"><StatusPill :ok="r.ok" size="sm" /></td>
+              <!-- A pass that needed automatic fixes is not a clean pass. -->
+              <td class="px-5 py-3 text-right">
+                <StatusPill :ok="r.ok" :fixed="runVerdict(r) === 'fixed'" :title="r.ok ? fixesTitle(r) : undefined" size="sm" />
+              </td>
             </tr>
           </tbody>
         </table>

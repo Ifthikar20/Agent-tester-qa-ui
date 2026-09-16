@@ -18,16 +18,26 @@
  *
  * It reads; it never decides. What runs is whatever the runner parses.
  */
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { linkFor, readFlow, scopeLabel } from '@/readflow';
 import { TOKEN, TONE } from '@/flowcolors';
+import { concernCount, concernLabel, isThinking, notesByIndex, offeredFix, thinkingCount } from '@/stepnotes';
 import FlowLegend from '@/components/FlowLegend.vue';
 
 const props = defineProps({
   flow: { type: String, default: '' },
   /** The height the textarea it replaces would have had, in rows. */
   rows: { type: Number, default: 10 },
+  /**
+   * What the runner worked out about each step while it was recorded
+   * (stepnotes.js), by step index: Thinking… while it reads the page, what the
+   * step did, and anything that looks like a recording mistake. Only a live
+   * recording has any.
+   */
+  notes: { type: Array, default: () => [] },
 });
+/** A note's fix, pressed. The parent sends it to the runner, which alone changes a recording. */
+const emit = defineEmits(['fix']);
 
 const VIEWS = [['steps', 'Steps'], ['source', 'Source']];
 const view = ref('steps');
@@ -52,6 +62,19 @@ function toggle(s) {
   expanded.value = next;
 }
 
+const byIndex = computed(() => notesByIndex(props.notes));
+const noteOf = (s) => byIndex.value.get(s.index) ?? null;
+/** The steps whose notes are opened to show what the AI noticed. */
+const opened = ref(new Set());
+// Kept by step index, and a step taken out moves every index after it.
+watch(() => read.value.steps.length, (now, before) => { if (now < before) opened.value = new Set(); });
+function toggleNote(s) {
+  const next = new Set(opened.value);
+  if (next.has(s.index)) next.delete(s.index);
+  else next.add(s.index);
+  opened.value = next;
+}
+
 const LINK = 'text-code-link underline decoration-code-link/30 underline-offset-2 hover:decoration-code-link';
 /** A link on the page reads as a link here too; any other element is just its name. */
 const nameColour = (s) => (s.role === 'link' ? 'text-code-link' : 'text-ink');
@@ -68,6 +91,11 @@ const nameColour = (s) => (s.role === 'link' ? 'text-code-link' : 'text-ink');
       <span class="text-code-check">{{ plural(read.counts.checks, 'check') }}</span>
       <span>{{ plural(read.counts.pages, 'page') }}</span>
       <span v-if="read.counts.warnings" class="font-medium text-code-todo">{{ read.counts.warnings }} to look at</span>
+      <span v-if="thinkingCount(notes)" class="flex items-center gap-1 text-brand-2" role="status">
+        <span class="size-1.5 animate-pulse rounded-full bg-brand motion-reduce:animate-none" aria-hidden="true" />
+        Thinking…
+      </span>
+      <span v-if="concernCount(notes)" class="font-medium text-warn">{{ plural(concernCount(notes), 'step') }} flagged</span>
       <span class="ml-auto flex items-center gap-2.5">
         <button v-if="view === 'source' && read.evidence.lines" type="button"
                 class="text-ink-3 underline decoration-ink-3/40 underline-offset-2 hover:text-ink"
@@ -112,6 +140,39 @@ const nameColour = (s) => (s.role === 'link' ? 'text-code-link' : 'text-ink');
               <span v-if="s.vault" class="ml-1.5 font-mono"
                     :class="s.vault === 'TODO' ? 'rounded bg-code-todo/10 px-1 font-semibold text-code-todo' : 'text-code-vault'">← ${{ s.vault }}</span>
               <span v-if="s.warn" class="mt-0.5 block text-[11.5px] text-code-todo">⚠ {{ s.warn }}</span>
+              <!-- What the runner worked out about this step as it was recorded
+                   (stepnotes.js): Thinking… while it reads the page, then one line
+                   of what the step did — what the AI noticed opens under it — and
+                   anything that looks like a recording mistake, with the fix a
+                   person can apply. Text only: the words are the model's. -->
+              <template v-if="noteOf(s)">
+                <span v-if="isThinking(noteOf(s))" class="mt-0.5 flex items-center gap-1.5 text-[11.5px] text-ink-3">
+                  <span class="flex shrink-0 gap-0.5 motion-reduce:hidden" aria-hidden="true">
+                    <span v-for="d in 3" :key="d" class="size-1 rounded-full bg-brand opacity-25 animate-[thinking-dot_1.2s_ease-in-out_infinite]"
+                          :style="{ animationDelay: `${(d - 1) * 0.16}s` }" />
+                  </span>
+                  Thinking…
+                </span>
+                <span v-if="noteOf(s).summary" class="mt-0.5 flex items-baseline gap-1.5 text-[11.5px] text-ink-2">
+                  <span class="shrink-0 rounded px-1 text-[10px] font-medium"
+                        :class="noteOf(s).tier === 'ai' ? 'bg-brand-50 text-brand-2' : 'bg-ink/[0.06] text-ink-3'">{{ noteOf(s).tier === 'ai' ? 'AI' : 'Rule' }}</span>
+                  <button v-if="noteOf(s).noticed?.length" type="button" class="min-w-0 text-left hover:text-ink"
+                          :aria-expanded="opened.has(s.index)" :title="opened.has(s.index) ? 'Hide what it noticed' : 'Show what it noticed'"
+                          @click="toggleNote(s)">{{ noteOf(s).summary }} <span class="text-ink-3" aria-hidden="true">{{ opened.has(s.index) ? '▾' : '▸' }}</span></button>
+                  <span v-else class="min-w-0">{{ noteOf(s).summary }}</span>
+                </span>
+                <ul v-if="opened.has(s.index) && noteOf(s).noticed?.length"
+                    class="mb-0.5 ml-1 mt-0.5 space-y-px border-l border-hairline pl-2 text-[11px] text-ink-3">
+                  <li v-for="(fact, k) in noteOf(s).noticed" :key="k">{{ fact }}</li>
+                </ul>
+                <span v-if="noteOf(s).concern" class="mt-0.5 block text-[11.5px] text-warn">
+                  <span class="font-medium">⚠ {{ concernLabel(noteOf(s).concern.kind) }}:</span>
+                  {{ noteOf(s).concern.text }}
+                  <button v-if="offeredFix(noteOf(s))" type="button"
+                          class="ml-1 rounded border border-warn/40 px-1.5 py-px align-[1px] text-[11px] font-medium hover:bg-warn/10"
+                          @click="emit('fix', noteOf(s))">{{ offeredFix(noteOf(s)).label }}</button>
+                </span>
+              </template>
             </span>
           </li>
         </ol>

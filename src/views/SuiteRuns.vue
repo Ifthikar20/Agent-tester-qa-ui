@@ -3,6 +3,8 @@ import { computed, ref, watch } from 'vue';
 import { api } from '@/api';
 import { useSuites } from '@/stores/suites';
 import { useLive } from '@/stores/live';
+import { fixesTitle, runVerdict } from '@/fixes';
+import { failureLabel } from '@/reasoning';
 import RunsChart from '@/components/RunsChart.vue';
 import StatusPill from '@/components/StatusPill.vue';
 import StatTile from '@/components/StatTile.vue';
@@ -82,12 +84,22 @@ const dur = (ms) => (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`);
                 <p class="mt-0.5 text-[12px] text-ink-3">
                   {{ when(r.at) }}<template v-if="r.error"> · {{ r.error }}</template>
                 </p>
+                <!-- The AI's why, for a failure no fix may change (reasoning.js):
+                     one line under what stopped the run. -->
+                <p v-if="r.why?.reason" class="mt-1 flex items-baseline gap-1.5 text-[12px] text-ink-2">
+                  <span class="shrink-0 rounded bg-brand-50 px-1 text-[10.5px] font-medium text-brand-2">AI</span>
+                  <span class="min-w-0"><template v-if="failureLabel(r.why.failure)">{{ failureLabel(r.why.failure) }}: </template>{{ r.why.reason }}</span>
+                </p>
               </td>
               <td class="px-3 py-3 tabular-nums text-ink-2">
                 {{ r.ok ? r.total : `${r.passed} of ${r.total}, stopped at ${r.step + 1}` }}
               </td>
               <td class="px-3 py-3 tabular-nums text-ink-2">{{ dur(r.ms) }}</td>
-              <td class="px-5 py-3 text-right"><StatusPill :ok="r.ok" size="sm" /></td>
+              <!-- A pass that needed automatic fixes reads differently from a clean
+                   one; what each fix did is on hover. -->
+              <td class="px-5 py-3 text-right">
+                <StatusPill :ok="r.ok" :fixed="runVerdict(r) === 'fixed'" :title="r.ok ? fixesTitle(r) : undefined" size="sm" />
+              </td>
             </tr>
           </tbody>
         </table>
