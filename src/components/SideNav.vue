@@ -380,21 +380,8 @@ const ICONS = {
          to the rail. -->
     <ThemeSwitch :rail="rail" :class="rail ? 'mx-2 mt-2' : 'mx-3 mb-1'" />
 
-    <!-- The toggle, where it can be found. The mark at the top does the same,
-         but nothing about a logo says "press me", so the sidebar read as fixed
-         until someone happened to hover that corner. -->
-    <button type="button" @click="ui.toggleNav()"
-            :title="rail ? 'Expand the sidebar' : 'Collapse the sidebar'"
-            :aria-label="rail ? 'Expand the sidebar' : 'Collapse the sidebar'"
-            :aria-expanded="!rail"
-            class="nav-item mb-3 hover:bg-ink/[0.04] hover:text-ink"
-            :class="rail ? 'nav-item-rail mx-2 mt-2' : 'mx-3'">
-      <svg viewBox="0 0 16 16" class="size-4 shrink-0" fill="none" stroke="currentColor"
-           stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M2.5 3h11v10h-11zM6 3v10" />
-        <path :d="rail ? 'M9 6.5 10.5 8 9 9.5' : 'M10.5 6.5 9 8l1.5 1.5'" />
-      </svg>
-      <span v-if="!rail">Collapse</span>
-    </button>
+    <!-- The collapse toggle sits at the head of the sidebar now (the row under
+         the mark); the foot keeps the theme switch. -->
+    <div class="mb-3" />
   </aside>
 </template>
