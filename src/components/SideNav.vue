@@ -19,6 +19,7 @@ import { useLive } from '@/stores/live';
 import { useSession } from '@/stores/session';
 import { useUi } from '@/stores/ui';
 import SiteIcon from '@/components/SiteIcon.vue';
+import ThemeSwitch from '@/components/ThemeSwitch.vue';
 import { api } from '@/api';
 
 const route = useRoute();
@@ -98,6 +99,7 @@ const ICONS = {
   settings:'M8 5.9a2.1 2.1 0 1 0 0 4.2 2.1 2.1 0 0 0 0-4.2M8 2.3l1 1.5 1.8-.3.5 1.7 1.6.8-.6 1.7.9 1.6-1.4 1.1v1.8l-1.8.2-1 1.5L8 13l-1 .9-1-1.5-1.8-.2v-1.8L2.8 9.3l.9-1.6-.6-1.7 1.6-.8.5-1.7L7 3.8z',
   security:'M8 2.2 3.2 4v4c0 2.9 2 5 4.8 5.8 2.8-.8 4.8-2.9 4.8-5.8V4zM6 8l1.4 1.4L10.2 6.6',
   org:     'M5.5 7.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM10.5 7.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM2 13c0-2 1.6-3.3 3.5-3.3S9 11 9 13M7.5 13c0-2 1.3-3.3 3-3.3S14 11 14 13',
+  profile: 'M8 7.8a2.6 2.6 0 1 0 0-5.2 2.6 2.6 0 0 0 0 5.2M2.8 13.8c.5-2.6 2.7-4.2 5.2-4.2s4.7 1.6 5.2 4.2',
 };
 </script>
 
@@ -117,10 +119,13 @@ const ICONS = {
             :aria-expanded="!rail"
             class="group flex items-center gap-2.5 py-4 hover:bg-ink/[0.03]"
             :class="rail ? 'justify-center px-0' : 'px-4'">
-      <span class="grid size-7 shrink-0 place-items-center rounded-lg bg-ink">
+      <!-- At night the mark keeps a dark tile — the favicon's navy, edged so it
+           holds its shape on a dark sidebar — instead of inverting to a white
+           slab, and the wordmark takes the text-safe magenta. -->
+      <span class="grid size-7 shrink-0 place-items-center rounded-lg bg-ink dark:bg-night dark:ring-1 dark:ring-night-line">
         <span class="size-2 rounded-full bg-brand" />
       </span>
-      <span v-if="!rail" class="text-[15px] font-semibold tracking-tight text-ink">ghost<span class="text-brand">click</span></span>
+      <span v-if="!rail" class="text-[15px] font-semibold tracking-tight text-ink">ghost<span class="text-brand dark:text-brand-2">click</span></span>
       <svg v-if="!rail" viewBox="0 0 16 16" class="ml-auto size-4 text-ink-3 opacity-0 transition-opacity group-hover:opacity-100"
            fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M9.5 4.5 6 8l3.5 3.5" />
@@ -237,6 +242,28 @@ const ICONS = {
         <span v-else-if="live.running" :class="rail ? 'absolute right-1 top-1 size-1.5' : 'ml-auto size-1.5'" class="animate-pulse rounded-full bg-brand" title="running" />
       </RouterLink>
 
+      <!-- The person: who you are, the theme, and the account's own security.
+           Profile renders with no control plane too, because the theme needs no
+           account; Security exists only when there is a password to change. -->
+      <p v-if="!rail" class="eyebrow px-2 pb-2 pt-6">Account</p>
+      <div v-else class="mx-2 mt-6 mb-2 border-t border-hairline" />
+      <RouterLink to="/profile" class="nav-item hover:bg-ink/[0.04] hover:text-ink" active-class="nav-item-on"
+                  :class="rail && 'nav-item-rail'" :title="rail ? 'Profile &amp; settings' : null" :aria-label="rail ? 'Profile &amp; settings' : null">
+        <svg viewBox="0 0 16 16" class="size-4 shrink-0" fill="none" stroke="currentColor"
+             stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path :d="ICONS.profile" />
+        </svg>
+        <span v-if="!rail">Profile &amp; settings</span>
+      </RouterLink>
+      <RouterLink v-if="session.required" to="/security" class="nav-item hover:bg-ink/[0.04] hover:text-ink" active-class="nav-item-on"
+                  :class="rail && 'nav-item-rail'" :title="rail ? 'Security' : null" :aria-label="rail ? 'Security' : null">
+        <svg viewBox="0 0 16 16" class="size-4 shrink-0" fill="none" stroke="currentColor"
+             stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path :d="ICONS.security" />
+        </svg>
+        <span v-if="!rail">Security</span>
+      </RouterLink>
+
       <p v-if="!rail" class="eyebrow px-2 pb-2 pt-6">Admin</p>
       <div v-else class="mx-2 mt-6 mb-2 border-t border-hairline" />
       <RouterLink to="/settings" class="nav-item hover:bg-ink/[0.04] hover:text-ink" active-class="nav-item-on"
@@ -254,15 +281,6 @@ const ICONS = {
         </svg>
         Organisation
       </RouterLink>
-      <!-- The account's own settings exist only when there is an account:
-           with no control plane there is no password to change. -->
-      <RouterLink v-if="session.required" to="/security" class="nav-item hover:bg-ink/[0.04] hover:text-ink" active-class="nav-item-on">
-        <svg viewBox="0 0 16 16" class="size-4 shrink-0" fill="none" stroke="currentColor"
-             stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path :d="ICONS.security" />
-        </svg>
-        Security
-      </RouterLink>
     </nav>
 
     <!-- Signing in with no way to sign out is a half-built feature, and on a
@@ -271,13 +289,16 @@ const ICONS = {
     <div v-if="session.required && session.user"
          class="mt-3 flex items-center gap-2 rounded-xl border border-hairline bg-ground"
          :class="rail ? 'mx-2 justify-center p-2' : 'mx-3 px-3 py-2.5'">
-      <span class="grid size-7 shrink-0 place-items-center rounded-full bg-brand-50 text-[11.5px] font-medium text-brand-2"
-            :title="rail ? session.user.email : null">
-        {{ (session.user.name || session.user.email).slice(0, 1).toUpperCase() }}
-      </span>
-      <span v-if="!rail" class="min-w-0 grow truncate text-[12px] text-ink-2" :title="session.user.email">
-        {{ session.user.name || session.user.email }}
-      </span>
+      <RouterLink to="/profile" class="flex min-w-0 grow items-center gap-2 rounded-lg hover:text-ink"
+                  :class="rail && 'justify-center'"
+                  :title="rail ? `${session.user.email} — profile & settings` : 'Profile & settings'">
+        <span class="grid size-7 shrink-0 place-items-center rounded-full bg-brand-50 text-[11.5px] font-medium text-brand-2">
+          {{ (session.user.name || session.user.email).slice(0, 1).toUpperCase() }}
+        </span>
+        <span v-if="!rail" class="min-w-0 grow truncate text-[12px] text-ink-2">
+          {{ session.user.name || session.user.email }}
+        </span>
+      </RouterLink>
       <button v-if="!rail" class="shrink-0 rounded-lg px-2 py-1 text-[12px] text-ink-3 hover:bg-ink/[0.05] hover:text-ink"
               @click="signOut">Sign out</button>
     </div>
@@ -302,6 +323,11 @@ const ICONS = {
         {{ version.commit ?? 'no git' }} · ui {{ version.built ? version.built.replace('T', ' ').slice(5, 16) : 'not built' }}
       </p>
     </div>
+
+    <!-- Light, dark or the device's. Above Collapse because that is the one row
+         of the footer present in every shape: signed in or not, open or folded
+         to the rail. -->
+    <ThemeSwitch :rail="rail" :class="rail ? 'mx-2 mt-2' : 'mx-3 mb-1'" />
 
     <!-- The toggle, where it can be found. The mark at the top does the same,
          but nothing about a logo says "press me", so the sidebar read as fixed

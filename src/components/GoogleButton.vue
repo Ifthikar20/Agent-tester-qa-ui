@@ -23,6 +23,7 @@ const props = defineProps({
   process: { type: String, default: 'login' },   // login | connect
   next: { type: String, default: '' },
   label: { type: String, default: 'Continue with Google' },
+  size: { type: String, default: 'md' },   // md | lg, as Btn.vue
 });
 
 const session = useSession();
@@ -40,11 +41,15 @@ const callback = computed(() => {
     <input type="hidden" name="provider" value="google">
     <input type="hidden" name="process" :value="process">
     <input type="hidden" name="callback_url" :value="callback">
+    <!-- At night, Google's own dark button (its branding guidelines): #131314
+         fill, #8e918f edge, #e3e3e3 text, and the four-colour mark unchanged. -->
     <button type="submit" :disabled="!session.csrf"
             class="inline-flex w-full items-center justify-center gap-2.5 rounded-full border border-hairline bg-panel
-                   px-4 py-2 text-[13px] font-medium text-ink transition-[transform,border-color,background-color]
+                   px-4 font-medium text-ink transition-[transform,border-color,background-color]
                    duration-75 hover:border-ink/25 hover:bg-ink/[0.03] active:scale-[0.97]
-                   disabled:cursor-not-allowed disabled:text-ink-3">
+                   disabled:cursor-not-allowed disabled:text-ink-3
+                   dark:border-[#8e918f] dark:bg-[#131314] dark:text-[#e3e3e3]"
+            :class="size === 'lg' ? 'py-3 text-[14px]' : 'py-2 text-[13px]'">
       <!-- Google's four-colour mark, inline: no request to anyone for a logo. -->
       <svg viewBox="0 0 24 24" class="size-4 shrink-0" aria-hidden="true">
         <path fill="#4285F4" d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.5h6.5a5.6 5.6 0 0 1-2.4 3.6v3h3.9c2.3-2.1 3.5-5.2 3.5-8.8z" />

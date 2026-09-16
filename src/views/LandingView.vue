@@ -5,8 +5,9 @@
  * A port of the Cansee landing page (ftb-ui, src/pages/LandingPage.vue): the
  * same editorial cream-and-ink system — Instrument Serif for display, Inter for
  * everything else, hierarchy from serif against sans rather than from bold —
- * and the same floating nav pill, split hero, trust strip, alternating feature
- * rows, sticky FAQ aside and ink footer. What changed on the way over:
+ * and the same floating nav pill, split hero, alternating feature rows, sticky
+ * FAQ aside and ink footer, with a row of blog cards before the close. What
+ * changed on the way over:
  *
  *   - The words are ghostclick's, and every claim is one the product backs up
  *     on the next screen. A landing page that oversells a tool is one the first
@@ -16,32 +17,51 @@
  *     stylesheet and the font files from any other origin.
  *   - The watercolour videos are LandingWell, a CSS gradient — the same CSP,
  *     and the clips are tens of megabytes.
- *   - Every call to action is sign in.
+ *   - Behind the hero is a painting: LandingCanvas, a photograph of a canvas
+ *     under a wash of cream that thins on the way down, dissolving into the
+ *     page before the first section of copy.
+ *   - Every call to action is sign in — or, for an account that is already
+ *     signed in, the app and a way out.
  *
- * Signed in, the router never sends anyone here (meta.anonymousOnly), and with
- * no control plane there is nothing to sign in to, so the guard sends you to
- * the suites. This page exists for exactly one state.
+ * Two states, then. A stranger sees sign in everywhere; an account sees Open
+ * the app and Log out, and logging out leaves them here as a stranger. With
+ * no control plane there is nothing to sign in to or out of, so the guard
+ * sends everyone to the suites (router.js) and this page never mounts.
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import LandingCanvas from '@/components/landing/LandingCanvas.vue';
 import LandingWell from '@/components/landing/LandingWell.vue';
+import { useSession } from '@/stores/session';
 import '@fontsource/instrument-serif/latin-400.css';
 import '@fontsource/inter/latin-400.css';
 import '@fontsource/inter/latin-500.css';
 import '@fontsource/inter/latin-600.css';
 import '@fontsource/inter/latin-700.css';
 
+const session = useSession();
 const signIn = { name: 'login' };
+const theApp = { name: 'suites' };
+
+/**
+ * A real account is here. `session.signedIn` is also true on an open runner,
+ * where there is nobody to sign in as — but an open runner never shows this
+ * page (router.js), so the two agree everywhere this is read.
+ */
+const signedIn = computed(() => session.required && session.user !== null);
+/** Where the main button goes, and what it says, in each of the two states. */
+const primary = computed(() => (signedIn.value
+  ? { to: theApp, label: 'Open the app' }
+  : { to: signIn, label: 'Get Started' }));
 
 const scrolled = ref(false);
 const activeFlow = ref(0);
-const activeWhy = ref(0);
 const hero = ref(null);
 
 const flows = ['sign in', 'check out', 'reset a password', 'update a profile'];
 
 const useCases = [
   {
-    key: 'watch', label: 'Watch a failing step happen', feature: 'Live console', anchor: '#why',
+    key: 'watch', label: 'Watch a failing step happen', feature: 'Live console', anchor: '#how',
     blurb: 'A real Chromium streamed to you, with the cursor it is clicking with.',
     icon: ['M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z', 'M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z'],
   },
@@ -80,35 +100,6 @@ const heroSteps = [
   { label: 'click Sign in', ms: '1040ms' },
   { label: 'url ~ /dashboard', ms: '310ms' },
   { label: 'text: Welcome back', ms: '120ms' },
-];
-
-const whyItems = [
-  { num: '01', label: 'Watch the run, not a log.' },
-  { num: '02', label: 'Name the button, not the markup.' },
-  { num: '03', label: 'The diagram cannot drift from the test.' },
-];
-
-/** The end of the bundled Meridian run, whose username field keeps 16 of 20 characters. */
-const lastSteps = [
-  { n: 8, label: 'fill profile.username' },
-  { n: 9, label: 'click profile.save' },
-  { n: 10, label: 'text: Profile saved' },
-  { n: 11, label: 'profile.username = 20 chars', failed: true },
-];
-
-/** The same run as the report draws it (diagram.js, block-beta). */
-const reportCells = [
-  { t: '1 ▶ localhost:3000/demo.html', wide: true },
-  { t: '2 fill auth.email ← vault' },
-  { t: '3 fill auth.password ← vault' },
-  { t: '4 click auth.submit' },
-  { t: '5 click nav.settings' },
-  { t: '6 url ~ /settings', check: true },
-  { t: '7 click settings.profileTab' },
-  { t: '8 fill profile.username' },
-  { t: '9 click profile.save' },
-  { t: '10 text: Profile saved', check: true },
-  { t: '11 profile.username = 20 chars', check: true, fail: true, wide: true },
 ];
 
 const showcaseFeatures = [
@@ -252,6 +243,23 @@ const faqItems = [
     a: 'Accounts are by invitation while ghostclick is in preview. Organisations have owners, admins and members: origins and the vault are an owner’s or admin’s to change, and members run and view.' },
 ];
 
+/* ── From the blog ──
+   Three pieces, each on something the product actually does. Until there is
+   a blog to send them to, each one reads on to the part of this page that
+   says the same thing at length. Wells 0, 1 and 3: the final CTA below the
+   row is 2, and neighbouring wells should not match (LandingWell.vue). */
+const posts = [
+  { eyebrow: 'Case language', well: 0, href: '#uc-language',
+    title: 'Name the button, not the markup.',
+    desc: 'Why a step that says what a person sees survives the rewrite that breaks a CSS selector.' },
+  { eyebrow: 'Recording', well: 1, href: '#uc-record',
+    title: 'Record a flow from the Chrome you are already signed in to.',
+    desc: 'Behind SSO, a VPN or a real login: the extension holds your next click and asks what you meant by it.' },
+  { eyebrow: 'Defects', well: 3, href: '#uc-defects',
+    title: 'Defects that close themselves.',
+    desc: 'Failures grouped by the sentence they stopped on — one broken step is one defect, and it closes when a case passes again.' },
+];
+
 /* ── Mobile nav sheet ──
    The desktop pill collapses below 1024px, so everything inside it needs a
    home. The sheet owns focus while open and hands it back on close. */
@@ -269,6 +277,20 @@ function closeNav() {
 function toggleNav() {
   if (navOpen.value) closeNav();
   else openNav();
+}
+
+/* ── Log out ──
+   The account leaves and the page stays: `signedIn` turns false as the store
+   goes anonymous, and every button on this page is already reading it. The
+   sidebar's sign-out goes to the sign-in form instead (SideNav.vue), because
+   the shell it sits in cannot be drawn for a stranger; this page can. */
+const loggingOut = ref(false);
+async function logOut() {
+  if (loggingOut.value) return;
+  loggingOut.value = true;
+  try { await session.logout(); }
+  finally { loggingOut.value = false; }
+  closeNav();
 }
 
 function onNavKeydown(ev) {
@@ -449,9 +471,10 @@ onUnmounted(() => {
         </nav>
 
         <div class="nav-right">
-          <RouterLink :to="signIn" class="nav-link-text">Sign in</RouterLink>
-          <RouterLink :to="signIn" class="nav-cta">
-            Get Started
+          <button v-if="signedIn" type="button" class="nav-link-text as-link" :disabled="loggingOut" @click="logOut">Log out</button>
+          <RouterLink v-else :to="signIn" class="nav-link-text">Sign in</RouterLink>
+          <RouterLink :to="primary.to" class="nav-cta">
+            {{ primary.label }}
             <span class="nav-cta-arrow" aria-hidden="true">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M8 7h9v9" /></svg>
             </span>
@@ -477,219 +500,100 @@ onUnmounted(() => {
         <span class="nav-sheet-eyebrow">More</span>
         <a href="#features">Features</a>
         <a href="#how">How It Works</a>
-        <RouterLink :to="signIn" class="nav-sheet-login" @click="closeNav">Sign in</RouterLink>
-        <RouterLink :to="signIn" class="nav-sheet-cta" @click="closeNav">Get Started</RouterLink>
+        <button v-if="signedIn" type="button" class="nav-sheet-login as-link" :disabled="loggingOut" @click="logOut">Log out</button>
+        <RouterLink v-else :to="signIn" class="nav-sheet-login" @click="closeNav">Sign in</RouterLink>
+        <RouterLink :to="primary.to" class="nav-sheet-cta" @click="closeNav">{{ primary.label }}</RouterLink>
       </div>
     </header>
 
-    <!-- ═══ Hero ═══ -->
-    <section ref="hero" class="hero">
-      <div class="wrap hero-grid">
-        <div class="hero-left">
-          <h1 class="hero-h anim" data-anim="hero">
-            BROWSER TESTING,<br />
-            WATCHED.<br />
-            RECORDED.<br />
-            <em>NO SELECTORS.</em>
-          </h1>
-          <div class="hero-bottom anim" data-anim="fade-up" data-delay="60">
-            <p class="hero-p">
-              Watch a real Chromium
-              <span class="hero-word-cycler" aria-live="off">
-                <TransitionGroup name="word-cycle">
-                  <span :key="flows[activeFlow]" class="hero-word">{{ flows[activeFlow] }}</span>
-                </TransitionGroup>
-              </span>
-              on your app, one visible step at a time. Record a flow instead of writing it — and
-              when something breaks, watch the step it broke on.
-            </p>
-            <div class="hero-actions">
-              <RouterLink :to="signIn" class="hero-cta">
-                Get Started
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 5l7 7-7 7" /></svg>
-              </RouterLink>
-              <span class="hero-note">Accounts are by invitation while this is in preview.</span>
-            </div>
-          </div>
-        </div>
+    <!-- ═══ The hero, on the painting ═══
+         .head is positioned so LandingCanvas can take its height, and the
+         canvas hangs its dissolve below this box (LandingCanvas.vue). -->
+    <div class="head">
+      <LandingCanvas />
 
-        <!-- The hero media: the console, drawn rather than streamed. The arrow is
-             the real one's path (ConsoleView.vue) and the steps are labelled the
-             way vocabulary.js labels them. Pure CSS — it costs no script. -->
-        <div class="hero-right anim" data-anim="fade-up" data-delay="220">
-          <div class="hero-stage">
-            <LandingWell :variant="0" :tint="0.12" />
-            <div
-              class="console"
-              role="img"
-              aria-label="The ghostclick console running a case: a cursor fills in the email and password on a staging sign-in page and clicks Sign in."
-            >
-              <div class="console-bar">
-                <span class="console-dots"><i /><i /><i /></span>
-                <span class="console-url">
-                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3.5" y="7" width="9" height="6" rx="1.5" /><path d="M5.5 7V5.5a2.5 2.5 0 0 1 5 0V7" /></svg>
-                  <b>staging.acme.com</b><span>/login</span>
+      <!-- ═══ Hero ═══ -->
+      <section ref="hero" class="hero">
+        <div class="wrap hero-grid">
+          <div class="hero-left">
+            <h1 class="hero-h anim" data-anim="hero">
+              BROWSER TESTING,<br />
+              WATCHED.<br />
+              RECORDED.<br />
+              <em>NO SELECTORS.</em>
+            </h1>
+            <div class="hero-bottom anim" data-anim="fade-up" data-delay="60">
+              <p class="hero-p">
+                Watch a real Chromium
+                <span class="hero-word-cycler" aria-live="off">
+                  <TransitionGroup name="word-cycle">
+                    <span :key="flows[activeFlow]" class="hero-word">{{ flows[activeFlow] }}</span>
+                  </TransitionGroup>
                 </span>
-                <span class="console-live"><i />Live</span>
+                on your app, one visible step at a time. Record a flow instead of writing it — and
+                when something breaks, watch the step it broke on.
+              </p>
+              <div class="hero-actions">
+                <RouterLink :to="primary.to" class="hero-cta">
+                  {{ primary.label }}
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 5l7 7-7 7" /></svg>
+                </RouterLink>
+                <span v-if="signedIn" class="hero-note">Signed in as {{ session.user.name || session.user.email }}.</span>
+                <span v-else class="hero-note">Accounts are by invitation while this is in preview.</span>
               </div>
-              <div class="console-page">
-                <div class="console-login">
-                  <span class="console-brand"><i />Acme</span>
-                  <span class="console-h">Sign in to Acme</span>
-                  <span class="console-field">
-                    Email
-                    <span class="console-input is-email"><span class="console-typed">qa@acme.com</span></span>
+            </div>
+          </div>
+
+          <!-- The hero media: the console, drawn rather than streamed. The arrow is
+               the real one's path (ConsoleView.vue) and the steps are labelled the
+               way vocabulary.js labels them. Pure CSS — it costs no script. -->
+          <div class="hero-right anim" data-anim="fade-up" data-delay="220">
+            <div class="hero-stage">
+              <LandingWell :variant="0" :tint="0.12" />
+              <div
+                class="console"
+                role="img"
+                aria-label="The ghostclick console running a case: a cursor fills in the email and password on a staging sign-in page and clicks Sign in."
+              >
+                <div class="console-bar">
+                  <span class="console-dots"><i /><i /><i /></span>
+                  <span class="console-url">
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3.5" y="7" width="9" height="6" rx="1.5" /><path d="M5.5 7V5.5a2.5 2.5 0 0 1 5 0V7" /></svg>
+                    <b>staging.acme.com</b><span>/login</span>
                   </span>
-                  <span class="console-field">
-                    Password
-                    <span class="console-input is-password"><span class="console-typed">••••••••••••</span></span>
-                  </span>
-                  <span class="console-submit">Sign in</span>
-                  <i class="console-ripple" />
-                  <svg class="console-cursor" viewBox="0 0 24 24"><path d="M5 2l14 9-6 1.2L10.2 20z" fill="var(--brand)" stroke="#fff" stroke-width="1.6" stroke-linejoin="round" /></svg>
+                  <span class="console-live"><i />Live</span>
                 </div>
-              </div>
-              <ol class="console-steps">
-                <li v-for="(s, i) in heroSteps" :key="s.label">
-                  <span class="n">{{ i + 1 }}</span>
-                  <span class="ok">✓</span>
-                  <span class="lbl">{{ s.label }}</span>
-                  <span class="ms">{{ s.ms }}</span>
-                </li>
-              </ol>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- ═══ Trust strip ═══ -->
-    <section class="trust anim" data-anim="fade-up">
-      <div class="trust-row">
-        <span class="trust-label">Drives</span>
-        <span class="trust-item">A real Chromium</span>
-        <span class="trust-item">Playwright locators</span>
-        <span class="trust-item">Chrome DevTools screencast</span>
-        <span class="trust-item">On a laptop, a server, or CI</span>
-      </div>
-    </section>
-
-    <!-- ═══ Why this exists — split editorial layout ═══ -->
-    <section id="why" class="why anim" data-anim="fade-up">
-      <div class="wrap why-wrap">
-        <div class="why-split">
-          <div class="why-left">
-            <h2 class="why-h">
-              Most test failures arrive as a log.<br />
-              <span class="why-h-quiet">You should get to watch them.</span>
-            </h2>
-            <p class="why-sub">
-              A red build tells you that something broke, and rarely what the page looked like when
-              it did. ghostclick drives a separate, real browser a step at a time and streams it to
-              you — so a failure is something you saw, on the step it happened.
-            </p>
-
-            <ul class="why-list">
-              <li v-for="(w, i) in whyItems" :key="w.num" class="why-row">
-                <button
-                  type="button"
-                  class="why-item"
-                  :class="{ 'is-active': activeWhy === i }"
-                  :aria-pressed="activeWhy === i ? 'true' : 'false'"
-                  @click="activeWhy = i"
-                >
-                  <span class="why-item-num">{{ w.num }}</span>
-                  <span class="why-item-label">{{ w.label }}</span>
-                  <span class="why-item-arrow" aria-hidden="true">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M8 7h9v9" /></svg>
-                  </span>
-                </button>
-              </li>
-            </ul>
-          </div>
-
-          <div class="why-right">
-            <div class="why-panel">
-              <div class="why-demo">
-                <Transition name="why-demo-fade" mode="out-in">
-                  <div v-if="activeWhy === 0" key="demo-0" class="why-demo-panel">
-                    <div class="why-demo-head">
-                      <span class="why-demo-dot" />
-                      Run · Username length boundary
-                    </div>
-                    <div class="why-demo-body">
-                      The end of the run, step by step:
-                      <ol class="why-demo-list">
-                        <li v-for="s in lastSteps" :key="s.n" :data-n="s.n" :class="s.failed ? 'is-failed' : 'hi'">
-                          {{ s.label }}
-                          <span v-if="s.failed" class="why-demo-you-tag">
-                            <svg width="14" height="10" viewBox="0 0 14 10" fill="none" aria-hidden="true"><path d="M13 5H1M1 5l4-4M1 5l4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
-                            It broke here
-                          </span>
-                        </li>
-                      </ol>
-                    </div>
-                    <div class="why-demo-foot">
-                      The page said Profile saved. <strong>The field kept 16 characters.</strong>
-                    </div>
+                <div class="console-page">
+                  <div class="console-login">
+                    <span class="console-brand"><i />Acme</span>
+                    <span class="console-h">Sign in to Acme</span>
+                    <span class="console-field">
+                      Email
+                      <span class="console-input is-email"><span class="console-typed">qa@acme.com</span></span>
+                    </span>
+                    <span class="console-field">
+                      Password
+                      <span class="console-input is-password"><span class="console-typed">••••••••••••</span></span>
+                    </span>
+                    <span class="console-submit">Sign in</span>
+                    <i class="console-ripple" />
+                    <svg class="console-cursor" viewBox="0 0 24 24"><path d="M5 2l14 9-6 1.2L10.2 20z" fill="var(--brand)" stroke="#fff" stroke-width="1.6" stroke-linejoin="round" /></svg>
                   </div>
-
-                  <div v-else-if="activeWhy === 1" key="demo-1" class="why-demo-panel">
-                    <div class="why-demo-head">
-                      <span class="why-demo-dot" />
-                      One button, two ways to point at it
-                    </div>
-                    <div class="why-demo-body">
-                      <div class="why-target is-brittle">
-                        <code>#login-form > div:nth-child(3) > button.btn-primary</code>
-                        <span>breaks on the next redesign</span>
-                      </div>
-                      <div class="why-target">
-                        <code>click 'Sign in' : button</code>
-                        <span>what the page calls it, and the role it plays</span>
-                      </div>
-                      <p class="why-demo-label">On this page</p>
-                      <div class="why-chips">
-                        <span>Sign in</span><span>Email</span><span>Password</span><span>Forgot password?</span>
-                      </div>
-                    </div>
-                    <div class="why-demo-foot">
-                      Matched <strong>exactly</strong> — one target names one element.
-                    </div>
-                  </div>
-
-                  <div v-else key="demo-2" class="why-demo-panel">
-                    <div class="why-demo-head">
-                      <span class="why-demo-dot" />
-                      Run report · 11 steps · 1 failed
-                    </div>
-                    <div class="why-grid">
-                      <span
-                        v-for="c in reportCells"
-                        :key="c.t"
-                        class="why-cell"
-                        :class="{ 'is-wide': c.wide, 'is-check': c.check, 'is-fail': c.fail }"
-                      >{{ c.t }}</span>
-                    </div>
-                    <div class="why-demo-foot">
-                      Drawn from <strong>the same structure the executor walks</strong> — so it cannot describe a different test.
-                    </div>
-                  </div>
-                </Transition>
+                </div>
+                <ol class="console-steps">
+                  <li v-for="(s, i) in heroSteps" :key="s.label">
+                    <span class="n">{{ i + 1 }}</span>
+                    <span class="ok">✓</span>
+                    <span class="lbl">{{ s.label }}</span>
+                    <span class="ms">{{ s.ms }}</span>
+                  </li>
+                </ol>
               </div>
             </div>
           </div>
         </div>
-
-        <div class="why-cta anim" data-anim="fade-up" data-delay="300">
-          <span class="why-cta-line">Every run is something you can <strong>watch, replay, and paste into a ticket</strong>.</span>
-          <RouterLink :to="signIn" class="why-cta-btn">
-            Sign in to run a suite
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 5l7 7-7 7" /></svg>
-          </RouterLink>
-        </div>
-      </div>
-    </section>
+      </section>
+    </div>
 
     <!-- ═══ Stats ═══ -->
     <section ref="statsSection" class="stats anim" data-anim="fade-up">
@@ -776,7 +680,7 @@ onUnmounted(() => {
                   <span class="mock-code-mark">{{ l.error ? '✕' : l.reads ? '✓' : '' }}</span>
                 </button>
               </div>
-              <Transition name="why-demo-fade" mode="out-in">
+              <Transition name="mock-fade" mode="out-in">
                 <div v-if="pinned.error" key="refused" class="mock-reads is-bad">
                   <div class="mock-reads-title">Refused at save</div>
                   <div class="mock-reads-error">{{ pinned.error }}</div>
@@ -915,7 +819,7 @@ onUnmounted(() => {
         <aside class="faq-aside anim" data-anim="fade-up">
           <span class="faq-eyebrow">FAQ</span>
           <h2 class="faq-h">Questions,<br /><em>answered plainly.</em></h2>
-          <RouterLink :to="signIn" class="faq-aside-btn">Sign in</RouterLink>
+          <RouterLink :to="primary.to" class="faq-aside-btn">{{ signedIn ? 'Open the app' : 'Sign in' }}</RouterLink>
         </aside>
         <div class="faq-list">
           <details v-for="(item, i) in faqItems" :key="item.q" class="faq-item anim" data-anim="fade-up" :data-delay="i * 60">
@@ -929,20 +833,49 @@ onUnmounted(() => {
       </div>
     </section>
 
+    <!-- ═══ From the blog — three cards on colour wells ═══ -->
+    <section id="blog" class="blog">
+      <div class="wrap">
+        <h2 class="sec-h anim" data-anim="hero">From the blog.<br /><em>Notes on testing you can watch.</em></h2>
+        <div class="blog-grid">
+          <a
+            v-for="(post, i) in posts"
+            :key="post.title"
+            :href="post.href"
+            class="blog-card anim"
+            data-anim="fade-up"
+            :data-delay="i * 90"
+          >
+            <LandingWell :variant="post.well" :tint="0.18" />
+            <span class="blog-eyebrow">{{ post.eyebrow }}</span>
+            <span class="blog-body">
+              <h3 class="blog-title">{{ post.title }}</h3>
+              <span class="blog-desc">{{ post.desc }}</span>
+              <span class="blog-more">
+                Read more
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M8 7h9v9" /></svg>
+              </span>
+            </span>
+          </a>
+        </div>
+      </div>
+    </section>
+
     <!-- ═══ Final CTA ═══ -->
     <section ref="finalCtaSection" class="final-cta anim" data-anim="fade-up">
       <LandingWell :variant="2" :tint="0.74" />
       <div class="wrap cta-inner">
         <h2>Ready to watch <em>your first run?</em></h2>
-        <p>Sign in, point ghostclick at an app you have allowed, and see it work through a case a step at a time.</p>
-        <RouterLink :to="signIn" class="btn-primary">Get Started</RouterLink>
+        <p v-if="signedIn">Point ghostclick at an app you have allowed, and see it work through a case a step at a time.</p>
+        <p v-else>Sign in, point ghostclick at an app you have allowed, and see it work through a case a step at a time.</p>
+        <RouterLink :to="primary.to" class="btn-primary">{{ primary.label }}</RouterLink>
       </div>
     </section>
 
     <!-- ═══ Sticky CTA pill ═══ -->
     <Transition name="sticky-cta">
-      <RouterLink v-if="showStickyCta" :to="signIn" class="sticky-cta">
-        Sign in to ghostclick
+      <RouterLink v-if="showStickyCta" :to="primary.to" class="sticky-cta">
+        {{ signedIn ? 'Open the app' : 'Sign in to ghostclick' }}
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 5l7 7-7 7" /></svg>
       </RouterLink>
     </Transition>
@@ -976,9 +909,16 @@ onUnmounted(() => {
 
           <div class="footer-col">
             <div class="footer-col-title">Account</div>
-            <RouterLink :to="signIn">Sign in</RouterLink>
-            <RouterLink :to="{ name: 'signup' }">Create an account</RouterLink>
-            <RouterLink :to="{ name: 'forgot-password' }">Forgot password</RouterLink>
+            <template v-if="signedIn">
+              <RouterLink :to="theApp">Open the app</RouterLink>
+              <RouterLink :to="{ name: 'profile' }">Profile &amp; settings</RouterLink>
+              <button type="button" class="as-link" :disabled="loggingOut" @click="logOut">Log out</button>
+            </template>
+            <template v-else>
+              <RouterLink :to="signIn">Sign in</RouterLink>
+              <RouterLink :to="{ name: 'signup' }">Create an account</RouterLink>
+              <RouterLink :to="{ name: 'forgot-password' }">Forgot password</RouterLink>
+            </template>
           </div>
         </div>
 
@@ -1068,6 +1008,10 @@ onUnmounted(() => {
   width: 100%;
   max-width: 100vw;
   overflow-x: clip;
+  /* One stacking context for the page, so LandingCanvas at z-index -1 sits
+     over this cream and under every word. */
+  position: relative;
+  isolation: isolate;
   -webkit-font-smoothing: antialiased;
   font-synthesis-weight: none;
 }
@@ -1089,10 +1033,13 @@ onUnmounted(() => {
    says so, or it inherits 500 and the browser draws a synthetic bold. */
 .step-num,
 .stats-card-num, .stats-card-prefix,
-.why-item-num,
 .nav-sheet a { font-weight: 400; }
 
 .lp button { font: inherit; color: inherit; }
+/* A button drawn as a link: Log out, which is an action, standing where Sign
+   in, which is a page, stands for a stranger. */
+.lp .as-link { background: none; border: 0; padding: 0; margin: 0; cursor: pointer; text-align: inherit; }
+.lp .as-link:disabled { cursor: default; opacity: .55; }
 .lp p { margin: 0; }
 .lp ul, .lp ol { margin: 0; padding: 0; list-style: none; }
 
@@ -1124,6 +1071,12 @@ strong { font-weight: 600; }
 .final-cta a:focus-visible { outline-color: var(--on-ink); }
 
 .wrap { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+
+/* The hero, which LandingCanvas fills — positioned so it
+   can take their height, and deliberately not a stacking context, so its
+   z-index counts in .lp's and the sections after this box paint over the
+   dissolve that hangs below it. */
+.head { position: relative; }
 
 .lp [id] { scroll-margin-top: 128px; }
 
@@ -1412,7 +1365,8 @@ strong { font-weight: 600; }
   transition: opacity .25s ease, transform .35s var(--ease);
 }
 .nav-sheet.is-open { opacity: 1; transform: none; pointer-events: auto; }
-.nav-sheet a {
+.nav-sheet a,
+.nav-sheet .as-link {
   padding: 12px 4px;
   font-family: var(--serif);
   font-size: 32px;
@@ -1697,156 +1651,6 @@ strong { font-weight: 600; }
 @keyframes tick-6 { 0%, 91% { opacity: 0; } 92%, 100% { opacity: 1; } }
 @keyframes live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
 
-/* ═══ Trust strip ═══════════════════════════════════════════ */
-
-.trust { background: var(--cream-alt); }
-.trust-row {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 28px 24px;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 28px;
-}
-.trust-label { color: var(--muted); }
-.trust-item { color: var(--ink); }
-
-/* ═══ Why this exists ═══════════════════════════════════════ */
-
-.why { padding: var(--sec-pad) 0; }
-.why-split { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
-.why-h { margin-bottom: 20px; }
-.why-h-quiet { color: var(--muted); }
-.why-sub { max-width: 500px; color: var(--muted); margin-bottom: 32px; }
-
-.why-list { border-top: 1px solid var(--hair); }
-.why-row { border-bottom: 1px solid var(--hair); }
-.why-item {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) 48px;
-  align-items: center;
-  gap: 16px;
-  width: 100%;
-  padding: 20px 0;
-  background: none;
-  border: 0;
-  text-align: left;
-  cursor: pointer;
-  color: var(--muted);
-  transition: color .2s ease;
-}
-.why-item:hover, .why-item.is-active { color: var(--ink); }
-.why-item-num { font-family: var(--serif); font-size: 20px; color: inherit; }
-.why-item-arrow {
-  display: grid;
-  place-items: center;
-  width: 48px;
-  height: 48px;
-  border: 1px solid var(--hair);
-  border-radius: 50%;
-  color: inherit;
-  transition: transform .35s var(--ease), background .2s ease, border-color .2s ease;
-}
-.why-item:hover .why-item-arrow,
-.why-item.is-active .why-item-arrow {
-  transform: translate(2px, -2px);
-  background: var(--ink);
-  border-color: var(--ink);
-  color: var(--on-ink);
-}
-
-.why-panel {
-  padding: 24px;
-  background: #fffcf7;
-  border: 1px solid var(--card-hair);
-  border-radius: var(--r-card);
-  box-shadow: 0 14px 40px rgba(0, 0, 0, .07);
-  min-height: 420px;
-  display: flex;
-  color: var(--card-fg);
-}
-.why-demo { width: 100%; }
-.why-demo-panel { display: flex; flex-direction: column; gap: 16px; height: 100%; }
-.why-demo-fade-enter-active, .why-demo-fade-leave-active { transition: opacity .3s ease, transform .3s var(--ease); }
-.why-demo-fade-enter-from { opacity: 0; transform: translateY(8px); }
-.why-demo-fade-leave-to { opacity: 0; transform: translateY(-8px); }
-
-.why-demo-head { display: flex; align-items: center; gap: 10px; color: var(--card-fg); }
-.why-demo-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--card-fg); }
-.why-demo-body { color: var(--card-mut); }
-.why-demo-list { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
-.why-demo-list li {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--card-hair);
-  color: var(--card-mut);
-  font-family: var(--mono);
-  font-size: 13.5px;
-}
-.why-demo-list li::before { content: attr(data-n); min-width: 22px; color: var(--muted-2); font-family: var(--sans); font-size: 14px; }
-.why-demo-list li.hi { color: var(--card-fg); }
-.why-demo-list li.is-failed { color: var(--fail); }
-.why-demo-you-tag {
-  display: inline-flex; align-items: center; gap: 6px;
-  margin-left: auto; padding: 3px 10px;
-  border: 1px solid currentColor; border-radius: var(--r-pill);
-  font-family: var(--sans); font-size: 13px; white-space: nowrap;
-}
-.why-demo-foot { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--card-hair); color: var(--card-dim); }
-.why-demo-foot strong { color: var(--card-fg); }
-
-.why-target { display: flex; flex-direction: column; gap: 4px; padding: 12px 0; border-bottom: 1px solid var(--card-hair); }
-.why-target code { font-family: var(--mono); font-size: 13.5px; color: var(--card-fg); overflow-wrap: anywhere; }
-.why-target.is-brittle code { color: var(--card-dim); text-decoration: line-through; text-decoration-color: var(--fail); }
-.why-target span { color: var(--card-dim); font-size: 14px; }
-.why-demo-label {
-  margin-top: 18px;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: .12em;
-  text-transform: uppercase;
-  color: var(--card-dim);
-}
-.why-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-.why-chips span { padding: 2px 10px; border: 1px solid var(--card-hair-2); border-radius: var(--r-pill); color: var(--card-mut); font-size: 14px; }
-
-.why-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
-.why-cell {
-  padding: 8px 9px;
-  border: 1px solid var(--card-hair);
-  border-radius: 6px;
-  background: var(--card-wash);
-  font-family: var(--mono);
-  font-size: 11.5px;
-  line-height: 1.35;
-  color: var(--card-fg);
-  overflow-wrap: anywhere;
-}
-.why-cell.is-wide { grid-column: 1 / -1; }
-.why-cell.is-check { border-radius: 16px; }
-.why-cell.is-fail { border-color: rgba(208, 59, 59, .45); background: rgba(208, 59, 59, .07); color: var(--fail); }
-
-.why-cta {
-  display: flex; align-items: center; justify-content: space-between;
-  flex-wrap: wrap; gap: 16px;
-  margin-top: 48px; padding-top: 32px; border-top: 1px solid var(--hair);
-}
-.why-cta-line { color: var(--muted); }
-.why-cta-line strong { color: var(--ink); }
-.why-cta-btn {
-  display: inline-flex; align-items: center; gap: 10px;
-  height: 42px; padding: 0 18px;
-  background: var(--ink); color: var(--on-ink);
-  border-radius: var(--r-pill); text-decoration: none;
-  transition: opacity .2s ease;
-}
-.why-cta-btn:hover { opacity: .85; }
-.why-cta-btn svg { transition: transform .35s var(--ease); }
-.why-cta-btn:hover svg { transform: translateX(3px); }
-
 /* ═══ Stats card ════════════════════════════════════════════ */
 
 .stats { padding: var(--sec-pad) 0; }
@@ -1904,6 +1708,11 @@ strong { font-weight: 600; }
 .feature-bullets { display: flex; flex-direction: column; gap: 12px; border-top: 1px solid var(--hair); padding-top: 20px; }
 .feature-bullets li { display: flex; align-items: baseline; gap: 12px; color: var(--muted); }
 .feature-bullet-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--ink); flex: 0 0 auto; transform: translateY(-3px); }
+
+/* One mock giving way to another inside a feature's well. */
+.mock-fade-enter-active, .mock-fade-leave-active { transition: opacity .3s ease, transform .3s var(--ease); }
+.mock-fade-enter-from { opacity: 0; transform: translateY(8px); }
+.mock-fade-leave-to { opacity: 0; transform: translateY(-8px); }
 
 /* The well is the frame; the mock floats on it. */
 .feature-visual {
@@ -2112,7 +1921,9 @@ strong { font-weight: 600; }
 /* ═══ How it works ══════════════════════════════════════════ */
 
 .how { padding: var(--sec-pad) 0; }
-.sec-h { margin-bottom: 40px; }
+/* `.lp h2` zeroes every heading margin at higher specificity, so a bare
+   `.sec-h` never won — the how-it-works heading sat on its list. */
+.lp .sec-h { margin-bottom: 40px; }
 .steps { border-top: 1px solid var(--hair); }
 .step {
   display: grid;
@@ -2181,6 +1992,66 @@ strong { font-weight: 600; }
 .faq-item[open] .faq-a { animation: faq-open .35s var(--ease) both; }
 @keyframes faq-open { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
 
+/* ═══ From the blog ═════════════════════════════════════════
+   Three cards, each a colour well left loud, with the copy at the foot the
+   way a caption sits under a photograph and a scrim rising under it so the
+   white type reads whatever colour the well is showing. The whole card is
+   the link. */
+
+.blog { padding: var(--sec-pad) 0; }
+.blog-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.blog-card {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 48px;
+  min-height: 440px;
+  padding: 24px;
+  border-radius: var(--r-card);
+  background: var(--ink);
+  color: var(--on-ink);
+  text-decoration: none;
+  /* opacity is the reveal's (.anim); listed here so this rule does not drop it. */
+  transition: opacity .7s var(--ease), transform .45s var(--ease), box-shadow .45s var(--ease);
+}
+.blog-card:hover { transform: translateY(-4px); box-shadow: 0 24px 60px rgba(0, 0, 0, .18); }
+/* The scrim. z-index -1 like the well, and later in tree order, so it sits
+   over the colour and under the words. */
+.blog-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(to top, rgba(0, 0, 0, .64) 0%, rgba(0, 0, 0, .32) 42%, transparent 70%);
+  pointer-events: none;
+}
+.blog-eyebrow {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--on-ink-mut);
+}
+.blog-body { display: flex; flex-direction: column; gap: 10px; }
+.blog-title { font-size: 28px; color: var(--on-ink); max-width: 16ch; }
+.blog-desc { font-size: 14px; line-height: 1.5; color: var(--on-ink-mut); max-width: 36ch; }
+.blog-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 14px;
+  color: var(--on-ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: rgba(255, 255, 255, .4);
+}
+.blog-more svg { transition: transform .35s var(--ease); }
+.blog-card:hover .blog-more svg { transform: translate(2px, -2px); }
+
 /* ═══ Final CTA — the crown on the footer ═══════════════════ */
 
 .final-cta {
@@ -2228,8 +2099,8 @@ strong { font-weight: 600; }
 .footer-tagline { color: var(--on-ink-mut); max-width: 34ch; }
 .footer-col { display: flex; flex-direction: column; gap: 12px; }
 .footer-col-title { font-size: 24px; line-height: 1.2; color: var(--on-ink); margin-bottom: 4px; }
-.footer-col a { color: var(--on-ink-mut); text-decoration: none; transition: color .2s ease; }
-.footer-col a:hover { color: var(--on-ink); }
+.footer-col a, .footer-col .as-link { color: var(--on-ink-mut); text-decoration: none; transition: color .2s ease; }
+.footer-col a:hover, .footer-col .as-link:hover { color: var(--on-ink); }
 .footer-bottom { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding-top: 24px; }
 .footer-copy { color: var(--on-ink-dim); }
 .footer-meta { display: flex; align-items: center; gap: 10px; color: var(--on-ink-dim); }
@@ -2250,7 +2121,7 @@ strong { font-weight: 600; }
   .nav-burger { display: flex; }
 
   .hero { padding: 128px 0 40px; }
-  .hero-grid, .why-split, .feature-row, .stats-card-top, .faq-wrap { grid-template-columns: 1fr; }
+  .hero-grid, .feature-row, .stats-card-top, .faq-wrap { grid-template-columns: 1fr; }
   .hero-left { min-height: 0; gap: 28px; }
   .hero-stage { min-height: 0; padding: 20px; }
   .feature-row.is-reverse .feature-copy { order: 0; }
@@ -2259,6 +2130,8 @@ strong { font-weight: 600; }
   .stats-card-bottom { grid-template-columns: 1fr; gap: 20px; }
   .faq-wrap { gap: 32px; }
   .faq-aside { position: static; }
+  .blog-grid { grid-template-columns: 1fr; }
+  .blog-card { min-height: 320px; }
   .step { grid-template-columns: 40px minmax(0, 1fr); gap: 8px 16px; }
   .step p { grid-column: 2; }
   .footer-grid { grid-template-columns: 1fr 1fr; }
@@ -2268,19 +2141,13 @@ strong { font-weight: 600; }
 @media (max-width: 767px) {
   .lp h1 { font-size: 40px; }
   .lp { --sec-pad: 48px; }
-  .wrap, .trust-row { padding-left: 16px; padding-right: 16px; }
+  .wrap { padding-left: 16px; padding-right: 16px; }
   .nav { padding: 0 16px; }
   .nav-sheet { left: 16px; right: 16px; }
   .nav-sheet a { font-size: 28px; }
 
   .hero { padding: 112px 0 32px; }
   .hero-stage { padding: 12px; }
-
-  .why-item { grid-template-columns: auto minmax(0, 1fr); gap: 12px; padding: 16px 0; }
-  .why-item-arrow { display: none; }
-  .why-panel { padding: 20px; min-height: 0; }
-  .why-cta { flex-direction: column; align-items: flex-start; }
-  .why-grid { grid-template-columns: 1fr 1fr; }
 
   .stats-card { padding: 24px; }
   .stats-card-num { font-size: 36px; }
@@ -2291,6 +2158,7 @@ strong { font-weight: 600; }
   .mock-cand-result { grid-column: 1; grid-row: 2; }
 
   .faq-aside { padding: 24px; }
+  .blog-card { padding: 20px; min-height: 300px; }
   .final-cta { padding: 72px 0 56px; }
   .footer-grid { grid-template-columns: 1fr; gap: 32px; }
   .sticky-cta { right: 16px; bottom: 16px; }

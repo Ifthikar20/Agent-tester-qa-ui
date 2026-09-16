@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice">
+  <!--
+    A stand-in for the photograph of the painted canvas (LandingCanvas.vue).
+    Drawn, so it weighs a few kilobytes and needs no fetch the runner's CSP
+    would refuse: linen from two fine noises at right angles, pigment from
+    blurred shapes pushed through a coarse noise so their edges bleed.
+  -->
+  <defs>
+    <filter id="linen" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency=".03 1.2" numOctaves="1" seed="2" result="warp"/>
+      <feTurbulence type="fractalNoise" baseFrequency="1.2 .03" numOctaves="1" seed="5" result="weft"/>
+      <feBlend in="warp" in2="weft" mode="multiply" result="cloth"/>
+      <feColorMatrix in="cloth" type="saturate" values="0" result="grey"/>
+      <feComponentTransfer in="grey">
+        <feFuncR type="linear" slope=".34" intercept=".84"/>
+        <feFuncG type="linear" slope=".34" intercept=".79"/>
+        <feFuncB type="linear" slope=".34" intercept=".68"/>
+        <feFuncA type="linear" slope="0" intercept="1"/>
+      </feComponentTransfer>
+    </filter>
+    <filter id="pigment" x="-30%" y="-30%" width="160%" height="160%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="18" result="soft"/>
+      <feTurbulence type="fractalNoise" baseFrequency=".009" numOctaves="4" seed="9" result="grain"/>
+      <feDisplacementMap in="soft" in2="grain" scale="160" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+    <filter id="tooth" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency=".8" numOctaves="2" seed="17" result="n"/>
+      <feColorMatrix in="n" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 .22 0"/>
+    </filter>
+  </defs>
+
+  <rect width="1600" height="1000" fill="#efe6d3"/>
+  <rect width="1600" height="1000" filter="url(#linen)"/>
+
+  <g filter="url(#pigment)">
+    <ellipse cx="1360" cy="110" rx="440" ry="150" fill="#ffd3a8" opacity=".5"/>
+    <ellipse cx="1160" cy="560" rx="600" ry="240" fill="#9f8cff" opacity=".55" transform="rotate(-8 1160 560)"/>
+    <ellipse cx="420" cy="850" rx="560" ry="210" fill="#ff9e6d" opacity=".62" transform="rotate(5 420 850)"/>
+    <ellipse cx="1330" cy="800" rx="440" ry="200" fill="#e6007c" opacity=".5" transform="rotate(-14 1330 800)"/>
+    <ellipse cx="820" cy="730" rx="360" ry="120" fill="#e9b86a" opacity=".6" transform="rotate(7 820 730)"/>
+    <ellipse cx="1010" cy="920" rx="300" ry="110" fill="#3b1f5e" opacity=".38" transform="rotate(-4 1010 920)"/>
+    <path d="M120 640 C 380 560, 640 700, 900 600 S 1380 520, 1560 640" fill="none" stroke="#fff4e0" stroke-width="42" stroke-linecap="round" opacity=".55"/>
+    <path d="M60 940 C 300 880, 560 960, 760 880" fill="none" stroke="#e6007c" stroke-width="26" stroke-linecap="round" opacity=".45"/>
+    <path d="M1180 300 C 1300 380, 1440 360, 1560 440" fill="none" stroke="#9f8cff" stroke-width="22" stroke-linecap="round" opacity=".4"/>
+  </g>
+
+  <rect width="1600" height="1000" filter="url(#tooth)"/>
+</svg>

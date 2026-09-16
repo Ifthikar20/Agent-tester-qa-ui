@@ -13,11 +13,12 @@ import { safeNext, useSession } from '@/stores/session';
  */
 const routes = [
   // The front door, and the only page that renders for someone with no account.
-  // `anonymousOnly` sends a signed-in arrival to the suites, and with no control
-  // plane configured the guard does the same — a landing page advertising a
-  // sign-in that does not exist would be a dead end.
+  // Open to an account too: it shows them the app and a way out instead of a
+  // sign-in, and logging out leaves them on it. With no control plane
+  // configured the guard sends everyone to the suites — a landing page
+  // advertising a sign-in that does not exist would be a dead end.
   { path: '/', name: 'landing', component: () => import('@/views/LandingView.vue'),
-    meta: { open: true, anonymousOnly: true } },
+    meta: { open: true } },
   { path: '/dashboard', name: 'dashboard', component: () => import('@/views/DashboardView.vue') },
   { path: '/suites', name: 'suites', component: () => import('@/views/SuitesView.vue') },
   { path: '/suites/new', name: 'suite-new', component: () => import('@/views/OnboardView.vue') },
@@ -35,6 +36,10 @@ const routes = [
   { path: '/defects', name: 'defects', component: () => import('@/views/DefectsView.vue') },
   { path: '/console', name: 'console', component: () => import('@/views/ConsoleView.vue') },
   { path: '/settings', name: 'settings', component: () => import('@/views/SettingsView.vue') },
+  // Who you are here, and the one setting that is the person's rather than
+  // the account's or the organisation's: light or dark. Renders with no
+  // control plane too, since the theme needs no account.
+  { path: '/profile', name: 'profile', component: () => import('@/views/ProfileView.vue') },
   // The organisation you act for (docs/AUTH.md §10): members, roles,
   // invitations, the plan and how much of it the runner counts as used.
   { path: '/organisation', name: 'organisation', component: () => import('@/views/OrganizationView.vue') },

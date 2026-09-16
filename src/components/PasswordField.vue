@@ -26,10 +26,18 @@ const shown = ref(false);
   <Field :label="label" :hint="hint">
     <div class="relative">
       <input :value="modelValue" :type="shown ? 'text' : 'password'" :autocomplete="autocomplete" required
-             spellcheck="false" class="pr-16"
+             spellcheck="false" class="pr-11"
              @input="$emit('update:modelValue', $event.target.value)">
-      <button type="button" class="absolute inset-y-0 right-2 my-auto h-7 rounded-md px-2 text-[12px] text-ink-3 hover:text-ink"
-              :aria-pressed="shown" @click="shown = !shown">{{ shown ? 'Hide' : 'Show' }}</button>
+      <!-- An eye, the way every other sign-in draws the reveal; the words are for assistive tech. -->
+      <button type="button" class="absolute inset-y-0 right-1.5 my-auto grid size-8 place-items-center rounded-md text-ink-3 hover:text-ink"
+              :aria-pressed="shown" :aria-label="shown ? 'Hide password' : 'Show password'"
+              :title="shown ? 'Hide password' : 'Show password'" @click="shown = !shown">
+        <svg viewBox="0 0 24 24" class="size-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" />
+          <path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z" />
+          <path v-if="shown" d="M4 4l16 16" />
+        </svg>
+      </button>
     </div>
   </Field>
 </template>

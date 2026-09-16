@@ -48,7 +48,7 @@ const plan = computed(() => props.plan ?? session.org?.plan ?? 'current');
       talked around. An owner of the organisation can move it to a bigger plan.
     </p>
     <div class="mt-3 flex gap-2">
-      <RouterLink to="/organisation" class="rounded-full bg-brand hover:bg-brand-2 px-4 py-2 text-[13px] font-medium text-white">
+      <RouterLink to="/organisation" class="rounded-full bg-brand hover:bg-brand-deep px-4 py-2 text-[13px] font-medium text-white">
         See the plan and usage
       </RouterLink>
       <button class="rounded-full border border-hairline px-4 py-2 text-[13px]" @click="$emit('dismiss')">Dismiss</button>

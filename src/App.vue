@@ -1,14 +1,17 @@
 <script setup>
-import { computed, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import SideNav from '@/components/SideNav.vue';
 import { useLive } from '@/stores/live';
 import { useSuites } from '@/stores/suites';
 import { useSession } from '@/stores/session';
+import { useUi } from '@/stores/ui';
+import { DARK_QUERY, THEME_KEY, parseChoice } from '@/theme';
 
 const live = useLive();
 const suites = useSuites();
 const session = useSession();
+const ui = useUi();
 const route = useRoute();
 
 // The account pages get no shell: sign in, the second factor, sign up, the
@@ -49,6 +52,59 @@ watch(() => [session.signedIn, session.mustChangePassword, session.mfa.required 
 // The sidebar shows case counts, so it has to notice when a suite gains one.
 watch(() => route.fullPath, () => {
   if (session.signedIn && !route.path.startsWith('/console')) suites.loadList();
+});
+
+/**
+ * Night mode, once the app is running.
+ *
+ * public/theme-boot.js put `data-theme` on <html> before the first paint; this
+ * keeps it true to the store after that — the sidebar's switch, the device
+ * turning dark while the choice is "system", or another tab choosing. It lives
+ * here rather than in SideNav because the sign-in pages have no sidebar and
+ * still have to follow.
+ *
+ * The landing page is drawn in its own cream palette and is not themed, so the
+ * document stays light while it shows — otherwise the scrollbar and any native
+ * control on it would turn dark around a cream page.
+ */
+function paintTheme(dark) {
+  const root = document.documentElement;
+  const theme = dark ? 'dark' : 'light';
+  if (root.getAttribute('data-theme') === theme) return;
+  // Every button eases its background over 120ms (app.css), so without this the
+  // page would recolour at once and its buttons a beat later, one by one. The
+  // attribute has to be on for a style recalculation that already sees the new
+  // colours, so reading offsetHeight forces that recalculation here; after it,
+  // taking the attribute off changes no colour and so starts no transition.
+  // Off on a timer rather than on the next animation frame: a hidden tab — one
+  // following another tab's choice — runs no frames, and would keep every
+  // transition in the app switched off until someone looked at it.
+  root.setAttribute('data-theme-switching', '');
+  root.setAttribute('data-theme', theme);
+  document.querySelector('meta[name="color-scheme"]')?.setAttribute('content', theme);
+  void root.offsetHeight;
+  setTimeout(() => root.removeAttribute('data-theme-switching'), 1);
+}
+watch(() => ui.dark && route.name !== 'landing', paintTheme, { immediate: true, flush: 'post' });
+
+let device = null;
+const onDevice = (e) => { ui.systemDark = e.matches; };
+// Another tab chose. `storage` never fires in the tab that wrote the value, and
+// localStorage.clear() elsewhere arrives with a null key. Assigned rather than
+// setTheme(): the value is already kept, and writing it back would be noise.
+const onStorage = (e) => { if (e.key === THEME_KEY || e.key === null) ui.theme = parseChoice(e.newValue); };
+onMounted(() => {
+  try {
+    device = window.matchMedia(DARK_QUERY);
+    ui.systemDark = device.matches;
+    device.addEventListener('change', onDevice);
+  } catch { device = null; }
+  window.addEventListener('storage', onStorage);
+});
+// App is never unmounted in a build; it is on every hot reload.
+onBeforeUnmount(() => {
+  device?.removeEventListener('change', onDevice);
+  window.removeEventListener('storage', onStorage);
 });
 </script>
 

@@ -11,6 +11,7 @@
  * construction takes the whole app down before it renders.
  */
 import { defineStore } from 'pinia';
+import { DARK_QUERY, THEME_KEY, parseChoice, resolve } from '@/theme';
 
 const KEY = 'gc.nav.collapsed';
 const DOCK_TAB = 'gc.dock.tab';
@@ -32,7 +33,8 @@ export const useUi = defineStore('ui', {
      * tabs stay on screen, with the run's result and the error count on them.
      */
     dockTab: (() => {
-      try { return localStorage.getItem(DOCK_TAB) === 'console' ? 'console' : 'run'; } catch { return 'run'; }
+      // Only a tab the dock has; a value from another version falls back to the run.
+      try { const v = localStorage.getItem(DOCK_TAB); return ['console', 'nav'].includes(v) ? v : 'run'; } catch { return 'run'; }
     })(),
     dockOpen: (() => {
       try { return localStorage.getItem(DOCK_OPEN) === '1'; } catch { return false; }
@@ -40,7 +42,23 @@ export const useUi = defineStore('ui', {
     dockHeight: (() => {
       try { return Number(localStorage.getItem(DOCK_HEIGHT)) || 240; } catch { return 240; }
     })(),
+    /**
+     * Light, dark, or the device's (src/theme.js). `systemDark` is the device's
+     * current answer, which App.vue keeps live — so "system" follows a laptop
+     * that turns dark at sunset without anyone reloading.
+     */
+    theme: (() => {
+      try { return parseChoice(localStorage.getItem(THEME_KEY)); } catch { return 'system'; }
+    })(),
+    systemDark: (() => {
+      try { return window.matchMedia(DARK_QUERY).matches; } catch { return false; }
+    })(),
   }),
+
+  getters: {
+    /** What is actually drawn. Anything that paints by theme reads this, not `theme`. */
+    dark: (s) => resolve(s.theme, s.systemDark) === 'dark',
+  },
 
   actions: {
     toggleNav() {
@@ -82,6 +100,11 @@ export const useUi = defineStore('ui', {
         localStorage.setItem(DOCK_OPEN, this.dockOpen ? '1' : '0');
         localStorage.setItem(DOCK_HEIGHT, String(this.dockHeight));
       } catch { /* private window */ }
+    },
+
+    setTheme(choice) {
+      this.theme = parseChoice(choice);
+      try { localStorage.setItem(THEME_KEY, this.theme); } catch { /* private window */ }
     },
   },
 });

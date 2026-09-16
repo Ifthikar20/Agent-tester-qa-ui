@@ -134,7 +134,7 @@ function toggleTracing() {
         <Field label="Allow another" class="flex-1">
           <input v-model="draft" placeholder="staging.acme.com" spellcheck="false" @keyup.enter="add">
         </Field>
-        <button class="mb-0.5 rounded-full bg-brand hover:bg-brand-2 px-4 py-2 text-[13px] font-medium text-white disabled:bg-ink/[0.05] disabled:text-ink-3"
+        <button class="mb-0.5 rounded-full bg-brand hover:bg-brand-deep px-4 py-2 text-[13px] font-medium text-white disabled:bg-ink/[0.05] disabled:text-ink-3"
                 :disabled="!draft" @click="add">Allow</button>
       </div>
     </section>

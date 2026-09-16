@@ -87,7 +87,7 @@ const nameColour = (s) => (s.role === 'link' ? 'text-code-link' : 'text-ink');
       <section v-for="(g, gi) in read.groups" :key="gi" class="border-b border-hairline last:border-b-0">
         <!-- The page, pinned while its steps scroll under it. -->
         <p class="sticky top-0 z-[1] flex items-center gap-2 bg-ground px-3.5 pb-1 pt-2 text-[12px]">
-          <span class="grid size-4 shrink-0 place-items-center rounded-full bg-ink text-[10px] font-semibold text-white">{{ gi + 1 }}</span>
+          <span class="grid size-4 shrink-0 place-items-center rounded-full bg-ink text-[10px] font-semibold text-on-ink">{{ gi + 1 }}</span>
           <a v-if="g.href" :href="g.href" target="_blank" rel="noopener noreferrer"
              class="min-w-0 truncate font-mono font-medium" :class="LINK" :title="`Open ${g.href} in a new tab`">{{ g.place }}</a>
           <span v-else class="min-w-0 truncate font-mono font-medium text-ink" :title="g.place">{{ g.place }}</span>

@@ -80,18 +80,19 @@ async function passkey() {
 </script>
 
 <template>
-  <AuthShell title="Sign in" blurb="Runs drive a real browser against your own applications, so they happen as someone.">
+  <AuthShell title="Welcome back" blurb="Sign in to your ghostclick account.">
     <ProviderError v-if="providerError" :error="providerError" :process="String(route.query.error_process ?? 'login')"
                    @dismiss="dismissError" />
 
-    <form v-else class="card mt-6 space-y-4 p-6" @submit.prevent="submit">
+    <!-- No card: the form is the page (AuthShell.vue), the fields sit straight on it. -->
+    <form v-else class="mt-8 space-y-5" @submit.prevent="submit">
       <Field label="Email">
         <input v-model="email" type="email" autocomplete="username" required
                autofocus spellcheck="false" placeholder="you@company.com">
       </Field>
       <PasswordField v-model="password" autocomplete="current-password" />
-      <p class="-mt-2 text-right text-[12.5px]">
-        <RouterLink :to="{ name: 'forgot-password' }" class="text-ink-3 underline hover:text-ink">Forgot your password?</RouterLink>
+      <p class="-mt-2 text-[13px]">
+        <RouterLink :to="{ name: 'forgot-password' }" class="text-ink hover:underline">Forgot password?</RouterLink>
       </p>
 
       <Turnstile v-if="needsTurnstile && session.config.turnstile" ref="widget"
@@ -101,7 +102,7 @@ async function passkey() {
         {{ session.error }}
       </p>
 
-      <Btn type="submit" :busy="busy" busy-label="Signing in…"
+      <Btn type="submit" size="lg" :busy="busy" busy-label="Signing in…"
            :disabled="!email || !password || (needsTurnstile && !turnstileToken)" class="w-full justify-center">
         Sign in
       </Btn>
@@ -113,10 +114,14 @@ async function passkey() {
         <p class="flex items-center gap-3 text-[11.5px] uppercase tracking-wide text-ink-3">
           <span class="h-px flex-1 bg-hairline" />or<span class="h-px flex-1 bg-hairline" />
         </p>
-        <Btn v-if="passkeysOn" variant="ghost" :busy="busy" busy-label="Waiting for the passkey…"
+        <Btn v-if="passkeysOn" variant="ghost" size="lg" :busy="busy" busy-label="Waiting for the passkey…"
              class="w-full justify-center" @click="passkey">Sign in with a passkey</Btn>
-        <GoogleButton v-if="session.config.google" process="login" :next="safeNext(route.query.next)" />
+        <GoogleButton v-if="session.config.google" process="login" size="lg" :next="safeNext(route.query.next)" />
       </template>
+
+      <p class="pt-1 text-center text-[13px]">
+        <RouterLink :to="{ name: 'landing' }" class="text-ink hover:underline">← Back to Home</RouterLink>
+      </p>
     </form>
 
     <template #foot>

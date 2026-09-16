@@ -77,7 +77,7 @@ async function withPasskey() {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-30 grid place-items-center bg-ink/40 px-6" @click.self="emit('cancel')">
+  <div class="fixed inset-0 z-30 grid place-items-center bg-scrim/40 px-6" @click.self="emit('cancel')">
     <div class="card w-full max-w-sm p-6" role="dialog" aria-modal="true" aria-labelledby="reauth-title">
       <h2 id="reauth-title" class="text-[16px] font-medium">Confirm it is you</h2>
       <p class="mt-1 text-[13px] leading-relaxed text-ink-2">

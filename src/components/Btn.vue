@@ -16,7 +16,7 @@ defineProps({
   disabled: Boolean,
   busyLabel: { type: String, default: null },
   variant: { type: String, default: 'primary' },   // primary | ghost | danger
-  size: { type: String, default: 'md' },           // sm | md
+  size: { type: String, default: 'md' },           // sm | md | lg — lg is the account pages', whose one button is the page
 });
 
 /**
@@ -25,11 +25,11 @@ defineProps({
  * you are never deciding between a pink block and a red block.
  */
 const LOOK = {
-  primary: 'bg-brand text-white hover:bg-brand-2',
+  primary: 'bg-brand text-white hover:bg-brand-deep',
   ghost:   'border border-hairline bg-panel text-ink hover:border-ink/25 hover:bg-ink/[0.03]',
   danger:  'border border-critical/40 bg-panel text-critical hover:bg-critical/5',
 };
-const SIZE = { sm: 'px-3 py-1.5 text-[12.5px]', md: 'px-4 py-2 text-[13px]' };
+const SIZE = { sm: 'px-3 py-1.5 text-[12.5px]', md: 'px-4 py-2 text-[13px]', lg: 'px-5 py-3 text-[14px]' };
 </script>
 
 <template>

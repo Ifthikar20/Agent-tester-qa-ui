@@ -62,7 +62,7 @@ const ui = useUi();
  * A run starting brings its tab forward and opens the dock, even one you
  * folded: watching the steps land is why you pressed Run.
  */
-const DOCK_TABS = ['run', 'console'];
+const DOCK_TABS = ['run', 'console', 'nav'];
 const dockPanel = ref(null);
 const runList = ref(null);
 const logList = ref(null);
@@ -113,7 +113,7 @@ watch(() => live.run?.steps.map((s) => s.state).join(), () => {
 }, { flush: 'post' });
 
 /**
- * The Browser console tab: everything the driven page printed and everything
+ * The Log tab: everything the driven page printed and everything
  * the runner said while driving it, as one live stream — filtered the way
  * DevTools filters, by level, by where a line came from, and by its text.
  *
@@ -481,11 +481,12 @@ const fold = (rows, same) => {
   }
   return out;
 };
-const logLines = computed(() => fold(live.log, (a, b) => a.msg === b.msg && a.level === b.level));
 
 /** Reopening the same page four times is one fact, not four. */
 const navLines = computed(() => fold(live.navs, (a, b) =>
   a.url === b.url && a.status === b.status && a.redirects === b.redirects));
+/** The Where-it-went badge: a 4xx/5xx landing or a hop off the origin is the reason to look. */
+const navAlerts = computed(() => live.navs.filter((x) => x.status >= 400 || x.leftOrigin).length);
 
 async function loadCases() {
   try { cases.value = (await api.cases()).cases; } catch { cases.value = []; }
@@ -591,10 +592,22 @@ watch(() => live.recordedFlow, (f) => {
     <!-- stage -------------------------------------------------------- -->
     <div>
       <!-- The chrome the canvas does not have. A video of a browser shows you
-           the page and nothing about where it is; this is the address bar. -->
-      <AddressBar :url="live.url" :nav="currentNav" />
+           the page and nothing about where it is; this is the address bar — and
+           the toolbar: overwrite the address and Open, or Record from here. -->
+      <AddressBar v-model="urlBox" :url="live.url" :nav="currentNav" :busy="!!opening" @open="open">
+        <template #actions>
+          <!-- An operator's switch (docs/HARDENING.md) disables it here as well as
+               refusing it on the runner, and says why on hover. -->
+          <button v-if="!live.recording" type="button"
+                  class="shrink-0 rounded-full border border-critical/40 px-3 py-1.5 text-[12.5px] font-medium text-critical hover:bg-critical/5 disabled:border-hairline disabled:text-ink-3"
+                  :disabled="live.running || live.switches['runner.recording'] === false"
+                  :title="live.switches['runner.recording'] === false ? 'Recording is turned off on this deployment' : 'Record what you do on the page as a script'"
+                  @click="record">● Record</button>
+          <button v-else type="button" class="shrink-0 rounded-full bg-critical px-3 py-1.5 text-[12.5px] font-medium text-on-critical" @click="stop">■ Stop</button>
+        </template>
+      </AddressBar>
 
-      <div ref="wrap" class="stage relative rounded-t-none" style="container-type: size; aspect-ratio: 1180 / 760">
+      <div ref="wrap" class="stage relative rounded-t-none dark:ring-1 dark:ring-night-line" style="container-type: size; aspect-ratio: 1180 / 760">
         <canvas ref="canvas" :width="VIEW.w" :height="VIEW.h" tabindex="0"
                 class="block h-full w-full cursor-none"
                 aria-label="The page being driven — click, type and scroll here to demonstrate"
@@ -626,25 +639,8 @@ watch(() => live.recordedFlow, (f) => {
         </div>
       </div>
 
-      <div class="mt-3 flex flex-wrap items-center gap-2">
-        <input v-model="urlBox" spellcheck="false" aria-label="URL to open"
-               placeholder="staging.acme.com/dashboard"
-               class="min-w-0 flex-1 rounded-full border border-hairline bg-panel px-4 py-2 text-[13.5px] outline-none focus:border-ink/25"
-               @keyup.enter="open">
-        <Btn :busy="!!opening" busy-label="Opening…" @click="open">Open</Btn>
-        <Btn variant="ghost" @click="live.send({ t: 'inspect' })">Re-scan</Btn>
-        <!-- An operator's switch (docs/HARDENING.md) disables it here as well as
-             refusing it on the runner, and says why on hover. -->
-        <button v-if="!live.recording" class="rounded-full border border-critical/40 px-4 py-2 text-[13px] text-critical disabled:border-hairline disabled:text-ink-3"
-                :disabled="live.running || live.switches['runner.recording'] === false"
-                :title="live.switches['runner.recording'] === false ? 'Recording is turned off on this deployment' : undefined"
-                @click="record">● Record</button>
-        <button v-else class="rounded-full bg-critical px-4 py-2 text-[13px] font-medium text-white" @click="stop">■ Stop</button>
-      </div>
-
       <p class="mt-2 text-[12.5px] text-ink-3">
-        Point at the page above and use your wheel or trackpad to scroll it — or the buttons.
-        Clicking and typing there go to the page you are driving, never to this one.
+        Click, type and scroll on the page above — it all goes to the page you are driving, never to this one.
       </p>
 
       <UpgradePrompt v-if="live.upgrade" class="mt-3" :limit="live.upgrade.limit" :plan="live.upgrade.plan" @dismiss="live.upgrade = null" />
@@ -720,20 +716,8 @@ watch(() => live.recordedFlow, (f) => {
 
     <!-- rail --------------------------------------------------------- -->
     <div class="grid content-start grid-cols-[minmax(0,1fr)] gap-4">
-      <!-- First in the rail. It is where anything that went wrong says so, and
-           it should not be below a list of everything that did not. -->
-      <section class="card p-5">
-        <h2 class="text-[15px] font-medium">Log</h2>
-        <ul class="mt-3 max-h-64 space-y-1 overflow-y-auto font-mono text-[11.5px]">
-          <li v-for="l in logLines" :key="l.id" class="flex gap-2"
-              :class="{ error: 'text-critical', warn: 'text-warn' }[l.level] ?? 'text-ink-2'">
-            <span class="min-w-0 grow">{{ l.msg }}</span>
-            <span v-if="l.n > 1" class="shrink-0 rounded bg-ink/[0.07] px-1.5 text-[10.5px] text-ink-2"
-                  :title="`said ${l.n} times in a row`">×{{ l.n }}</span>
-          </li>
-          <li v-if="!logLines.length" class="text-ink-3">Nothing yet.</li>
-        </ul>
-      </section>
+      <!-- No log card in the rail: the log is the Log tab in the dock along the
+           bottom, where the runner's lines and the page's are one filterable list. -->
 
       <section v-if="live.recording || live.recordedCount" class="card p-5">
         <div class="flex items-center gap-2">
@@ -772,6 +756,12 @@ watch(() => live.recordedFlow, (f) => {
         <div class="flex items-baseline gap-2">
           <h2 class="text-[15px] font-medium">On this page</h2>
           <span class="ml-auto text-[12.5px] text-ink-3">{{ live.targets.length }}</span>
+          <!-- The list refreshes itself when the page changes shape (domwatch);
+               this is for the time it did not, so it lives beside the list
+               rather than beside Open, where it read as a step everyone takes. -->
+          <button type="button" class="rounded-full border border-hairline px-2.5 py-0.5 text-[11.5px] text-ink-3 hover:border-ink/25 hover:text-ink"
+                  title="Read the page's controls again — the list normally refreshes on its own"
+                  @click="live.send({ t: 'inspect' })">Re-scan</button>
         </div>
         <p class="mt-1 truncate font-mono text-[11.5px] text-ink-3">
           {{ live.url && live.url !== 'about:blank' ? live.url : 'nothing open' }}
@@ -800,37 +790,8 @@ watch(() => live.recordedFlow, (f) => {
         </p>
       </section>
 
-      <!-- Where each navigation actually went. The final URL says nothing about
-           a 301 through a dead path, a detour via a tracker, or a friendly 404
-           — and none of those is visible anywhere else. -->
-      <section v-if="navLines.length" class="card p-5">
-        <div class="flex items-baseline gap-2">
-          <h2 class="text-[15px] font-medium">Where it went</h2>
-          <span class="ml-auto text-[12.5px] text-ink-3">{{ live.navs.length }}</span>
-        </div>
-        <ul class="mt-3 max-h-72 space-y-2.5 overflow-y-auto">
-          <li v-for="n in navLines" :key="n.id" class="border-b border-hairline pb-2.5 last:border-0 last:pb-0">
-            <p class="flex items-center gap-2 text-[12.5px]">
-              <span class="rounded px-1.5 py-0.5 font-mono text-[11px] font-medium"
-                    :class="n.status >= 400 ? 'bg-critical/10 text-critical'
-                          : n.redirects ? 'bg-warn/10 text-warn' : 'bg-ink/5 text-ink-2'">{{ n.status }}</span>
-              <span v-if="n.redirects" class="text-ink-2">
-                {{ n.redirects }} redirect{{ n.redirects === 1 ? '' : 's' }}
-              </span>
-              <span v-if="n.leftOrigin" class="text-critical">left the origin</span>
-              <span v-if="n.n > 1" class="ml-auto shrink-0 rounded bg-ink/[0.07] px-1.5 text-[11px] text-ink-2"
-                    :title="`opened ${n.n} times in a row`">×{{ n.n }}</span>
-            </p>
-            <p class="mt-1 truncate font-mono text-[11px] text-ink-3" :title="n.url">{{ n.url }}</p>
-            <ol v-if="n.redirects" class="mt-1.5 space-y-0.5">
-              <li v-for="(h, i) in n.hops" :key="i" class="flex gap-2 font-mono text-[10.5px] text-ink-3">
-                <span class="w-7 shrink-0 text-right">{{ h.status }}</span>
-                <span class="truncate" :title="h.url">{{ h.url }}</span>
-              </li>
-            </ol>
-          </li>
-        </ul>
-      </section>
+      <!-- No "Where it went" card here: every navigation the page made is the
+           dock's third tab along the bottom, beside the run and the log. -->
 
     </div>
   </div>
@@ -844,7 +805,7 @@ watch(() => live.recordedFlow, (f) => {
        always in reach while you scroll, but scrolled to the end it sets down
        under the last card instead of covering it. -->
   <section class="sticky bottom-0 z-10 border-t border-hairline bg-panel shadow-[0_-8px_24px_-16px_rgb(16_16_20/0.25)]"
-           aria-label="Run and browser console">
+           aria-label="Run, log and where it went">
     <div v-if="ui.dockOpen" role="separator" aria-orientation="horizontal" tabindex="0"
          aria-label="Resize the panel" :aria-valuenow="ui.dockHeight" aria-valuemin="96" title="Drag to resize"
          class="absolute inset-x-0 -top-1 z-10 h-2 cursor-row-resize touch-none hover:bg-brand/25 focus-visible:bg-brand/35 focus-visible:outline-none"
@@ -870,10 +831,20 @@ watch(() => live.recordedFlow, (f) => {
                 class="flex items-center gap-2 whitespace-nowrap border-b-2 px-2.5 py-2.5 text-[13px]"
                 :class="ui.dockOpen && ui.dockTab === 'console' ? 'border-brand font-medium text-ink' : 'border-transparent text-ink-3 hover:text-ink'"
                 @click="ui.showDock('console')">
-          Browser console
+          Log
           <span v-if="logErrors" class="rounded-full bg-critical/10 px-1.5 py-px text-[11px] font-medium tabular-nums text-critical"
                 :title="`${logErrors} error${logErrors === 1 ? '' : 's'}`">{{ logErrors }}</span>
           <span v-else-if="logRows.length" class="text-[11.5px] tabular-nums text-ink-3">{{ logRows.length }}</span>
+        </button>
+        <button id="dock-tab-nav" type="button" role="tab" aria-controls="dock-panel"
+                :aria-selected="ui.dockTab === 'nav'" :tabindex="ui.dockTab === 'nav' ? 0 : -1"
+                class="flex items-center gap-2 whitespace-nowrap border-b-2 px-2.5 py-2.5 text-[13px]"
+                :class="ui.dockOpen && ui.dockTab === 'nav' ? 'border-brand font-medium text-ink' : 'border-transparent text-ink-3 hover:text-ink'"
+                @click="ui.showDock('nav')">
+          Where it went
+          <span v-if="navAlerts" class="rounded-full bg-critical/10 px-1.5 py-px text-[11px] font-medium tabular-nums text-critical"
+                :title="`${navAlerts} navigation${navAlerts === 1 ? '' : 's'} worth a look`">{{ navAlerts }}</span>
+          <span v-else-if="live.navs.length" class="text-[11.5px] tabular-nums text-ink-3">{{ live.navs.length }}</span>
         </button>
       </div>
 
@@ -883,6 +854,9 @@ watch(() => live.recordedFlow, (f) => {
       </p>
       <p v-else-if="ui.dockOpen && ui.dockTab === 'console'" class="ml-2 hidden min-w-0 truncate text-[12.5px] text-ink-3 md:block">
         Everything the page printed and the runner said, as it happens.
+      </p>
+      <p v-else-if="ui.dockOpen && ui.dockTab === 'nav'" class="ml-2 hidden min-w-0 truncate text-[12.5px] text-ink-3 md:block">
+        Every navigation the page made, with the redirects it went through.
       </p>
 
       <div class="ml-auto flex shrink-0 items-center gap-1">
@@ -927,7 +901,7 @@ watch(() => live.recordedFlow, (f) => {
         </p>
       </div>
 
-      <template v-else>
+      <template v-else-if="ui.dockTab === 'console'">
         <!-- DevTools' filter bar, cut down to what a failing step needs: which
              levels, whose lines, and a word to find. -->
         <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-hairline px-6 py-1.5">
@@ -976,9 +950,40 @@ watch(() => live.recordedFlow, (f) => {
         </div>
 
         <button v-if="unseen" type="button"
-                class="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-ink px-3 py-1 text-[12px] font-medium text-white shadow-md"
+                class="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-ink px-3 py-1 text-[12px] font-medium text-on-ink shadow-md"
                 @click="toLatest">↓ {{ unseen }} new line{{ unseen === 1 ? '' : 's' }}</button>
       </template>
+
+      <!-- Where each navigation actually went. The final URL says nothing about
+           a 301 through a dead path, a detour via a tracker, or a friendly 404
+           — and none of those is visible anywhere else. -->
+      <div v-else class="relative min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        <ol v-if="navLines.length" class="font-mono text-[11.5px]">
+          <li v-for="x in navLines" :key="x.id" class="border-b border-hairline/70 px-6 py-2">
+            <p class="flex items-center gap-2">
+              <span class="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium"
+                    :class="x.status >= 400 ? 'bg-critical/10 text-critical'
+                          : x.redirects ? 'bg-warn/10 text-warn' : 'bg-ink/5 text-ink-2'">{{ x.status }}</span>
+              <span v-if="x.redirects" class="shrink-0 text-ink-2">
+                {{ x.redirects }} redirect{{ x.redirects === 1 ? '' : 's' }}
+              </span>
+              <span v-if="x.leftOrigin" class="shrink-0 text-critical">left the origin</span>
+              <span class="min-w-0 truncate text-ink" :title="x.url">{{ x.url }}</span>
+              <span v-if="x.n > 1" class="ml-auto shrink-0 rounded bg-ink/[0.07] px-1.5 text-[10.5px] text-ink-2"
+                    :title="`opened ${x.n} times in a row`">×{{ x.n }}</span>
+            </p>
+            <ol v-if="x.redirects" class="mt-1 space-y-0.5">
+              <li v-for="(h, i) in x.hops" :key="i" class="flex gap-2 text-[10.5px] text-ink-3">
+                <span class="w-7 shrink-0 text-right">{{ h.status }}</span>
+                <span class="truncate" :title="h.url">{{ h.url }}</span>
+              </li>
+            </ol>
+          </li>
+        </ol>
+        <p v-else class="px-6 py-3 text-[12.5px] text-ink-3">
+          Nothing yet. Every navigation the page makes lands here — with the redirects it went through, and whether it left the origin.
+        </p>
+      </div>
     </div>
   </section>
 </template>

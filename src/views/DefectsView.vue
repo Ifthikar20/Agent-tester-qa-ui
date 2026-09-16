@@ -88,7 +88,7 @@ const when = (t) => {
                 :title="only === 'open' ? 'Nothing is failing' : 'Nothing has failed yet'"
                 body="Defects are read out of run history — every failing run, grouped by the message it
                       stopped on. Run a suite and anything that breaks will collect here.">
-      <RouterLink to="/suites" class="rounded-full bg-brand px-4 py-2 text-[13.5px] font-medium text-white hover:bg-brand-2">
+      <RouterLink to="/suites" class="rounded-full bg-brand px-4 py-2 text-[13.5px] font-medium text-white hover:bg-brand-deep">
         Go to your suites
       </RouterLink>
     </EmptyState>

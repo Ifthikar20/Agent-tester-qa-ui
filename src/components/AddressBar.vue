@@ -1,6 +1,6 @@
 <script setup>
 /**
- * Where the driven browser actually is.
+ * The driven browser's address bar — and the one place you point it somewhere.
  *
  * The canvas is a video, so it has no chrome: no address bar, no lock, no
  * status. You can watch a page navigate somewhere else and have no way to learn
@@ -11,44 +11,50 @@
  *
  * So this is the chrome. It answers, in the order a person asks:
  *
- *   which application am I on   the origin, emphasised
- *   where in it                 the path, quieter
+ *   which application am I on   the address, with a padlock for https
  *   how did I get here          the redirect chain, if there was one
  *   should I be worried         whether it left the origin, and any 4xx/5xx
  *
- * The origin is the loud half on purpose. `/dashboard` on your staging app and
- * `/dashboard` on an identity provider look identical when the path is what
- * catches the eye, and telling them apart is the entire point of showing this.
+ * And it is where you go somewhere else. The console used to show the address
+ * up here and take a new one in a second box under the canvas, with Open,
+ * Re-scan and Record beside it: two boxes for one idea, and the actions as far
+ * from the page as the layout allowed. This is the toolbar every browser has
+ * already taught — the address you are on, which you can overwrite and open,
+ * with the actions that belong to the page beside it (the actions slot).
+ *
+ * The draft follows the page. When the page navigates, the box shows the new
+ * address — unless you are typing in it, in which case what you typed stays.
+ * Escape puts the page's address back.
  */
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
+import Btn from '@/components/Btn.vue';
 
 const props = defineProps({
   /** The address right now, or null when nothing is open. */
   url: { type: String, default: null },
   /** The navigation that produced it, if we have one: hops, status, leftOrigin. */
   nav: { type: Object, default: null },
+  /** The draft: what the box shows, and what Open opens. */
+  modelValue: { type: String, default: '' },
+  /** An open in flight. */
+  busy: Boolean,
 });
+const emit = defineEmits(['update:modelValue', 'open']);
 
-const open = ref(false);
-const copied = ref(false);
+const unfolded = ref(false);
+const focused = ref(false);
 
 const blank = (u) => !u || u === 'about:blank';
 
-/** Split for display. Never throws: this renders whatever the page reports. */
-const parts = computed(() => {
+// Follow the page, but never over someone's typing.
+watch(() => props.url, (u) => {
+  if (!blank(u) && !focused.value && u !== props.modelValue) emit('update:modelValue', u);
+}, { immediate: true });
+
+/** What the padlock says about the page that is open. Never throws. */
+const secure = computed(() => {
   if (blank(props.url)) return null;
-  try {
-    const u = new URL(props.url);
-    return {
-      secure: u.protocol === 'https:',
-      origin: u.host,
-      // The path is what is left. An empty one shows as "/" rather than as
-      // nothing, so the bar never looks truncated.
-      rest: `${u.pathname === '/' && !u.search && !u.hash ? '/' : u.pathname}${u.search}${u.hash}`,
-    };
-  } catch {
-    return { secure: false, origin: props.url, rest: '' };
-  }
+  try { return new URL(props.url).protocol === 'https:'; } catch { return false; }
 });
 
 const hops = computed(() => props.nav?.hops ?? []);
@@ -67,46 +73,47 @@ const short = (u) => {
   try { const p = new URL(u); return `${p.host}${p.pathname}${p.search}`; } catch { return u; }
 };
 
-async function copy() {
-  try {
-    await navigator.clipboard.writeText(props.url);
-    copied.value = true;
-    setTimeout(() => { copied.value = false; }, 1200);
-  } catch { /* no clipboard permission; the text is selectable anyway */ }
+function submit() {
+  if (props.modelValue.trim()) emit('open');
 }
 </script>
 
 <template>
   <div class="rounded-t-xl border border-b-0 border-hairline bg-ground px-3 py-2">
     <div class="flex items-center gap-2">
-      <!-- Scheme, as a shape rather than a word. A padlock is the one piece of
-           browser iconography everyone already reads correctly. -->
-      <svg v-if="parts" class="size-3.5 shrink-0" :class="parts.secure ? 'text-good' : 'text-ink-3'"
-           viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"
-           :aria-label="parts.secure ? 'https' : 'http'" role="img">
-        <rect v-if="parts.secure" x="3.5" y="7" width="9" height="6" rx="1.5" />
-        <path v-if="parts.secure" d="M5.5 7V5.5a2.5 2.5 0 0 1 5 0V7" />
-        <template v-else>
-          <circle cx="8" cy="8" r="5.5" />
-          <path d="M2.5 8h11M8 2.5c1.6 1.7 1.6 9.3 0 11M8 2.5c-1.6 1.7-1.6 9.3 0 11" />
-        </template>
-      </svg>
-
-      <p v-if="!parts" class="min-w-0 grow truncate font-mono text-[12.5px] text-ink-3">
-        Nothing open — the runner is not pointed at a page yet
-      </p>
-      <p v-else class="min-w-0 grow truncate font-mono text-[12.5px]" :title="url">
-        <span class="font-medium text-ink">{{ parts.origin }}</span><span class="text-ink-3">{{ parts.rest }}</span>
-      </p>
+      <!-- The address field. Scheme as a shape rather than a word: a padlock is
+           the one piece of browser iconography everyone already reads. -->
+      <label class="flex min-w-0 grow items-center gap-2 rounded-full border border-hairline bg-panel px-3 py-1.5
+                    focus-within:border-ink/25">
+        <svg class="size-3.5 shrink-0" :class="secure ? 'text-good' : 'text-ink-3'"
+             viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"
+             :aria-label="secure === null ? 'nothing open' : secure ? 'https' : 'http'" role="img">
+          <template v-if="secure">
+            <rect x="3.5" y="7" width="9" height="6" rx="1.5" />
+            <path d="M5.5 7V5.5a2.5 2.5 0 0 1 5 0V7" />
+          </template>
+          <template v-else>
+            <circle cx="8" cy="8" r="5.5" />
+            <path d="M2.5 8h11M8 2.5c1.6 1.7 1.6 9.3 0 11M8 2.5c-1.6 1.7-1.6 9.3 0 11" />
+          </template>
+        </svg>
+        <input :value="modelValue" spellcheck="false" autocomplete="off" aria-label="Address"
+               placeholder="staging.acme.com/dashboard — type an address and press Enter"
+               class="min-w-0 grow bg-transparent font-mono text-[12.5px] text-ink outline-none placeholder:text-ink-3"
+               :title="url ?? undefined"
+               @input="emit('update:modelValue', $event.target.value)"
+               @focus="focused = true" @blur="focused = false"
+               @keyup.enter="submit" @keydown.esc="emit('update:modelValue', blank(url) ? '' : url)">
+      </label>
 
       <!-- The chip that matters. A redirect onto another host is how a run ends
            up somewhere nobody allowed, so it is named rather than counted. -->
       <button v-if="leftOrigin" class="chip shrink-0 border-warn/40 bg-warn/10 text-warn"
               :title="`Started on ${cameFrom} and ended up somewhere else`"
-              @click="open = !open">
+              @click="unfolded = !unfolded">
         left {{ cameFrom }}
       </button>
-      <button v-else-if="redirects" class="chip shrink-0" @click="open = !open">
+      <button v-else-if="redirects" class="chip shrink-0" @click="unfolded = !unfolded">
         {{ redirects }} redirect{{ redirects === 1 ? '' : 's' }}
       </button>
 
@@ -114,15 +121,13 @@ async function copy() {
         {{ status }}
       </span>
 
-      <button v-if="parts" class="shrink-0 rounded-lg px-2 py-1 text-[11.5px] text-ink-3 hover:bg-ink/[0.05] hover:text-ink"
-              :title="'Copy ' + url" @click="copy">
-        {{ copied ? 'copied' : 'copy' }}
-      </button>
+      <Btn size="sm" :busy="busy" busy-label="Opening…" @click="submit">Open</Btn>
+      <slot name="actions" />
     </div>
 
     <!-- The chain, hop by hop, with the status each one answered. "It works"
          and "it works after three 301s" are different facts. -->
-    <ol v-if="open && hops.length > 1" class="mt-2 space-y-1 border-t border-hairline pt-2">
+    <ol v-if="unfolded && hops.length > 1" class="mt-2 space-y-1 border-t border-hairline pt-2">
       <li v-for="(h, i) in hops" :key="i" class="flex items-baseline gap-2 font-mono text-[11.5px]">
         <span class="w-8 shrink-0 text-right"
               :class="h.status >= 400 ? 'text-critical' : h.status >= 300 ? 'text-ink-3' : 'text-good'">

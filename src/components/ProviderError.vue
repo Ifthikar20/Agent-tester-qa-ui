@@ -33,7 +33,7 @@ const CANCELLED = 'The Google sign-in was cancelled before it finished.';
     <p class="mt-2 text-[13.5px] leading-relaxed text-ink-2">
       {{ error === 'cancelled' ? CANCELLED : (process === 'connect' ? REFUSED_CONNECT : REFUSED) }}
     </p>
-    <button type="button" class="mt-4 text-[13px] text-brand underline hover:text-brand-2" @click="$emit('dismiss')">
+    <button type="button" class="mt-4 text-[13px] text-brand underline hover:text-brand-2 dark:text-brand-2" @click="$emit('dismiss')">
       {{ process === 'connect' ? 'Back to security' : 'Sign in another way' }}
     </button>
   </div>

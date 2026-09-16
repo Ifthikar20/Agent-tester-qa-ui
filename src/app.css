@@ -1,5 +1,17 @@
 @import "tailwindcss";
 
+/* `dark:` follows the choice on <html> (public/theme-boot.js, App.vue) rather
+   than the device's preference alone, because a viewer can choose. Screen only,
+   like the night palette below: a page printed at night comes out on paper the
+   way it always has. */
+@custom-variant dark {
+  @media screen {
+    &:where([data-theme=dark], [data-theme=dark] *) {
+      @slot;
+    }
+  }
+}
+
 /**
  * The one stylesheet. The hand-written dashboard and console this replaced each
  * carried their own copy of these tokens, which is exactly how two pages end up
@@ -19,6 +31,13 @@
  * only ΔE 4.1 under deuteranopia, so a stacked bar reads as one block to a
  * red-green colourblind viewer. Failures carry the colour; passes stay neutral
  * (ΔE 9.4, clear of the ≥8 target). That pair is unchanged here.
+ *
+ * Night is these same tokens with other values (the block after `html` below),
+ * switched by `data-theme` on <html>. Where one token was doing two jobs that
+ * stop agreeing in the dark, it has been split rather than given a compromise:
+ * `brand-deep` is the hover fill under white text, `on-ink` and `on-critical`
+ * are the text on those two fills, and `scrim` is the veil behind a sheet.
+ * test/theme.test.js holds both palettes to the contrast promised here.
  */
 @theme {
   --font-display: ui-sans-serif, -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
@@ -31,10 +50,13 @@
   --color-hairline:   #eaeaef;
 
   /* The accent. brand fills, brand-2 is the text-safe shade, brand-50 the tint
-     behind whatever is currently selected. */
+     behind whatever is currently selected. brand-deep is what a primary button
+     darkens to under the pointer — it was brand-2 until night, where the text
+     shade has to turn light and white on it would no longer read. */
   --color-brand:      #e6007c;
   --color-brand-2:    #c2006a;
   --color-brand-50:   #fdeef6;
+  --color-brand-deep: #c2006a;
 
   /* Kept for the one place a dark surface is correct: the stage the driven
      browser is streamed onto, which should not glow at you. */
@@ -51,6 +73,13 @@
   --color-good:       #0ca30c;
   --color-critical:   #d03b3b;
   --color-warn:       #a86b00;
+
+  /* Text on a solid fill of ink or of critical, and the veil behind a sheet.
+     White, and a tint of ink, while the ground is light; at night ink itself
+     turns light, so each needs a value of its own. */
+  --color-on-ink:      #ffffff;
+  --color-on-critical: #ffffff;
+  --color-scrim:       #101014;
 
   /* The case language, coloured (FlowRead, and the editor in FlowBox). One hue
      per verb, so what a step does reads before its words do — each dark enough
@@ -90,6 +119,73 @@
 
 /* ------------------------------------------------------------------ base */
 html { color-scheme: light; }
+
+/* ----------------------------------------------------------------- night */
+/**
+ * The same tokens, at night. Unlayered like the rest of this section, so it
+ * outranks Tailwind's `@layer theme` defaults, and its selector outranks the
+ * `html` rule above.
+ *
+ * Surfaces keep their order — ground darker than panel — so a well, a table's
+ * header band and the TopBar still read as recessed. Text is off-white, never
+ * white. The accent fill does not move (white on it is 4.5:1 either way); its
+ * text shade and its tint do. Every text colour clears 4.5:1 on ground and on
+ * panel, and the chart pair still separates under deuteranopia (ΔE 15).
+ *
+ * brand, brand-deep and the night tokens are the same by day and by night on
+ * purpose; test/theme.test.js fails if any other colour is missing here.
+ */
+@media screen {
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+
+    --color-ground:     #0e0f13;
+    --color-panel:      #16171d;
+    --color-ink:        #ececf1;
+    --color-ink-2:      #b1b1bd;
+    --color-ink-3:      #90909d;
+    --color-hairline:   #2a2b33;
+
+    --color-brand-2:    #ff5eab;
+    --color-brand-50:   #3a0f27;
+
+    --color-glow-1:     #3a2418;
+    --color-glow-2:     #3b1430;
+    --color-glow-3:     #241c45;
+
+    --color-pass:       #7c7a84;
+    --color-fail:       #f26b6b;
+    --color-good:       #46cf5e;
+    --color-critical:   #f26b6b;
+    --color-warn:       #e3a33b;
+
+    --color-on-ink:      #0e0f13;
+    --color-on-critical: #0e0f13;
+    --color-scrim:       #000000;
+
+    --color-code-open:   #a5b4fc;
+    --color-code-link:   #60a5fa;
+    --color-code-click:  #ff6fb5;
+    --color-code-hover:  #fb923c;
+    --color-code-fill:   #b69cfb;
+    --color-code-scroll: #22d3ee;
+    --color-code-wait:   #a3e635;
+    --color-code-check:  #2dd4bf;
+    --color-code-see:    #4ade80;
+    --color-code-role:   #94a3b8;
+    --color-code-value:  #fcd34d;
+    --color-code-vault:  #e0a26a;
+    --color-code-todo:   #f87171;
+  }
+}
+
+/* Held on <html> for the one style recalculation a change of theme takes
+   (App.vue), so buttons change colour with the page instead of easing into it
+   a beat afterwards. */
+:root[data-theme-switching] *,
+:root[data-theme-switching] *::before,
+:root[data-theme-switching] *::after { transition: none !important; }
+
 /**
  * A long word wraps rather than widening its box.
  *
