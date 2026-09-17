@@ -27,7 +27,7 @@ import { api } from '@/api';
 export const TEXT_MAX = 2000;
 const TITLE_MAX = 60;
 /** The tools that drive a run: while one is in flight the page shows the live run under the tool line. */
-export const RUN_TOOLS = new Set(['run_case', 'run_suite', 'run_page_check', 'quickstart']);
+export const RUN_TOOLS = new Set(['run_case', 'run_suite', 'run_page_check', 'quickstart', 'run_drafts', 'plan_page_tests']);
 /** Events held while a send() waits on its 202; past this many, something else is wrong. */
 const EARLY_MAX = 200;
 /** Turn ids that finished, remembered so a stale answer to GET /api/chat cannot resurrect one. */
@@ -56,6 +56,7 @@ export const useChatStore = defineStore('chat', {
     llm: null,          // { mode: 'claude'|'mock', model, key: { have, from } }
     budget: null,       // { used, max } — model calls today
     busy: null,         // { id, conversationId }: the turn the runner is answering, whoever asked
+    stopping: null,     // the turn a stop was asked for, until its reply lands
     conversations: [],  // the list rows, newest first
     current: null,      // the open conversation with its messages — or null, so the next send starts one
     /**
@@ -155,10 +156,12 @@ export const useChatStore = defineStore('chat', {
      * bubble goes up at once and the reply builds in `turn` as events land.
      *
      * @param confirm the id of the proposal a button confirmed, when one did
+     * @param choices which of the proposal's items were ticked — the drafted
+     *          checks to run (chat.js); absent means all of them
      * @returns whether the runner took the turn — a refusal is in `error`
      *          (or `upgrade`, or `on`), never thrown at the view
      */
-    async send(text, { confirm = null } = {}) {
+    async send(text, { confirm = null, choices = null } = {}) {
       const asked = String(text ?? '').trim().slice(0, TEXT_MAX);
       if (!asked || this.pending) return false;
       this.error = null;
@@ -170,6 +173,7 @@ export const useChatStore = defineStore('chat', {
           ...(conversationId ? { conversationId } : {}),
           text: asked,
           ...(confirm ? { confirm } : {}),
+          ...(confirm && Array.isArray(choices) && choices.length ? { choices } : {}),
         });
       } catch (e) {
         // Whatever landed meanwhile was somebody else's turn: read it as it
@@ -222,6 +226,17 @@ export const useChatStore = defineStore('chat', {
       for (const ev of held.filter((x) => x.turn === r.turnId)) this.handle(ev);
       for (const ev of held.filter((x) => x.turn !== r.turnId)) this.handle(ev);
       return true;
+    },
+
+    /**
+     * Stop the reply being written: a run of drafted checks ends after the
+     * one in flight (chat.js stop) — a run cannot be broken off mid-step —
+     * and the reply says how far it got. Nothing to stop is not an error.
+     */
+    async stop() {
+      this.error = null;
+      try { const r = await api.chatStop(); this.stopping = r.stopping ?? null; return true; }
+      catch (e) { this.error = e.message; return false; }
     },
 
     /** Delete a conversation. A reply in flight for it has nowhere to go, so it goes too. */
@@ -299,6 +314,7 @@ export const useChatStore = defineStore('chat', {
           }
           if (mine) this.turn = null;
           if (this.busy?.id === ev.turn) this.busy = null;
+          if (this.stopping === ev.turn) this.stopping = null;
           this.finished.push(ev.turn);
           if (this.finished.length > FINISHED_MAX) this.finished.shift();
           // The row, until the list is read again: what was said last, and when.

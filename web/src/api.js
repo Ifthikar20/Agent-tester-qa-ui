@@ -195,4 +195,12 @@ export const api = {
   chatConversation: (id) => req(`/api/chat/${encodeURIComponent(id)}`),
   chatTurn:         (body) => req('/api/chat/turns', { method: 'POST', body }),
   deleteChat:       (id) => req(`/api/chat/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  // Stop the reply being written: a run of drafted checks ends after the one
+  // in flight. Answers { stopping: <turn id> | null }.
+  chatStop:         () => req('/api/chat/stop', { method: 'POST' }),
+
+  // Showing pages to a model: the organisation's two consents (fixing broken
+  // steps, drafting test cases), read and set by an owner or admin.
+  healSettings:     () => req('/api/settings/heal'),
+  setHealSettings:  (body) => req('/api/settings/heal', { method: 'PUT', body }),
 };

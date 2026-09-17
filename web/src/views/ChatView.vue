@@ -25,6 +25,7 @@ import UpgradePrompt from '@/components/UpgradePrompt.vue';
 import RunnerBusy from '@/components/RunnerBusy.vue';
 import Btn from '@/components/Btn.vue';
 import ChatRunCard from '@/components/ChatRunCard.vue';
+import ChatDraftList from '@/components/ChatDraftList.vue';
 
 const live = useLive();
 const suites = useSuites();
@@ -77,7 +78,7 @@ const suggestions = computed(() => [
   'How many defects do we have?',
   'What were the latest scans?',
   'Which test cases are saved?',
-  ...(firstPage.value ? [`Test the ${firstPage.value} page`] : []),
+  ...(firstPage.value ? [`Test the ${firstPage.value} page`, `Draft tests for the ${firstPage.value} page`] : []),
 ]);
 
 /** A run tool is under way for this reply: the live run belongs under its tool line. */
@@ -109,6 +110,29 @@ async function submit() {
   if (!sent && !draft.value) { draft.value = text; nextTick(grow); }
 }
 const ask = (text, opts) => { if (canSend.value) chat.send(text, opts); };
+
+/**
+ * A drafted check that passed becomes a saved case with one press: the
+ * runner's own POST /api/suites/:id/cases, marked `generated` so nobody
+ * mistakes it for a recording. Nothing is saved without this press.
+ */
+const saved = ref(new Set());
+const saving = ref(null);
+const keyOf = (r) => `${r.suiteId}:${r.candidate ?? r.caseName}:${r.at}`;
+async function keep(r) {
+  if (!r?.flow || !r.suiteId || saving.value) return;
+  saving.value = keyOf(r);
+  try {
+    await api.addCase(r.suiteId, { name: r.caseName, pageId: r.pageId ?? null, flow: r.flow, source: 'generated' });
+    saved.value = new Set([...saved.value, keyOf(r)]);
+  } catch (e) {
+    chat.error = e.message;
+  } finally {
+    saving.value = null;
+  }
+}
+/** The tick and the run: the ticked ids ride on the confirm (stores/chat.js send). */
+const runDrafts = (m, ids) => ask(ids.length === (m.proposal.items?.length ?? 0) ? 'Yes, run them all' : 'Yes, run the ones I ticked', { confirm: m.proposal.id, choices: ids });
 
 /** The box follows its lines, up to a height that keeps the transcript above it in view. */
 function grow() {
@@ -215,17 +239,24 @@ watch([() => messages.value.length, () => chat.turn?.text, () => chat.turn?.tool
               </li>
             </ul>
             <div v-if="m.runs?.length" class="mt-2 w-full max-w-[85%] space-y-2">
-              <ChatRunCard v-for="(r, i) in m.runs" :key="`${m.id}-${i}`" :run="r" />
+              <ChatRunCard v-for="(r, i) in m.runs" :key="`${m.id}-${i}`" :run="r"
+                           :saved="saved.has(keyOf(r))" :saving="saving === keyOf(r)" @save="keep(r)" />
             </div>
             <!-- A follow-up already written: pressed rather than typed out again. -->
             <div v-if="m.offers?.length" class="mt-2 flex flex-wrap gap-1.5">
               <Btn v-for="o in m.offers" :key="o.text" variant="ghost" size="sm"
                    :disabled="!canSend || !!chat.turn || otherTurn" :title="o.text" @click="ask(o.text)">{{ o.label }}</Btn>
             </div>
-            <div v-if="awaiting(m)" class="mt-2 flex flex-wrap items-center gap-2 rounded-xl border border-brand/20 bg-brand-50 px-3 py-2 text-[12.5px]">
-              <span class="text-ink">Go ahead and {{ m.proposal.label }}?</span>
-              <Btn size="sm" :disabled="!canSend || !!chat.turn || otherTurn" @click="ask('Yes, do it', { confirm: m.proposal.id })">Yes, do it</Btn>
-              <Btn size="sm" variant="ghost" :disabled="!canSend || !!chat.turn || otherTurn" @click="ask('No, leave it')">No</Btn>
+            <!-- The proposal's buttons. Drafted checks (items) ARE the confirm:
+                 tick some, press Run, and the ticked ids ride on the yes. -->
+            <div v-if="awaiting(m)" class="mt-2 w-full max-w-[85%] rounded-xl border border-brand/20 bg-brand-50 px-3 py-2 text-[12.5px]">
+              <ChatDraftList v-if="m.proposal.items?.length" :items="m.proposal.items" :disabled="!canSend || !!chat.turn || otherTurn"
+                             @run="(ids) => runDrafts(m, ids)" @drop="ask('No, leave it')" />
+              <div v-else class="flex flex-wrap items-center gap-2">
+                <span class="text-ink">Go ahead and {{ m.proposal.label }}?</span>
+                <Btn size="sm" :disabled="!canSend || !!chat.turn || otherTurn" @click="ask('Yes, do it', { confirm: m.proposal.id })">Yes, do it</Btn>
+                <Btn size="sm" variant="ghost" :disabled="!canSend || !!chat.turn || otherTurn" @click="ask('No, leave it')">No</Btn>
+              </div>
             </div>
             <p class="mt-1 text-[11px] text-ink-3">
               {{ when(m.at) }}<template v-if="m.role === 'assistant' && signed(m)"> · {{ signed(m) }}</template>
@@ -274,7 +305,13 @@ watch([() => messages.value.length, () => chat.turn?.text, () => chat.turn?.tool
           <span class="text-[11.5px] text-ink-3">Enter sends · Shift+Enter for a new line</span>
           <span v-if="draft.length >= TEXT_MAX - 200" class="text-[11.5px] tabular-nums text-ink-3">{{ draft.length }}/{{ TEXT_MAX }}</span>
           <span v-if="otherTurn" class="text-[11.5px] text-ink-3">A reply is being written…</span>
-          <Btn class="ml-auto" :busy="!!chat.turn" busy-label="Answering…"
+          <!-- A run of drafted checks can be stopped after the one in flight: the
+               runner cannot break a run off mid-step, and the reply says how far it got. -->
+          <Btn v-if="chat.turn?.running" class="ml-auto" variant="ghost" :disabled="!!chat.stopping"
+               :title="chat.stopping ? 'Stopping after the check in flight' : 'Stop after the check in flight'" @click="chat.stop()">
+            {{ chat.stopping ? 'Stopping…' : 'Stop' }}
+          </Btn>
+          <Btn :class="chat.turn?.running ? '' : 'ml-auto'" :busy="!!chat.turn" busy-label="Answering…"
                :disabled="!canSend || !draft.trim() || otherTurn" @click="submit">Send</Btn>
         </div>
         <p v-if="chat.error" class="mx-2 mb-1 mt-2 rounded-lg border border-critical/25 bg-critical/5 px-3 py-2 text-[12.5px] text-critical">

@@ -132,6 +132,8 @@ const pageName = (id) => suite.value.pages.find((p) => p.id === id)?.name ?? nul
           <p class="mt-0.5 text-[12px] text-ink-3">
             {{ c.steps }} step{{ c.steps === 1 ? '' : 's' }} · {{ c.source }}
             <template v-if="pageName(c.pageId)"> · {{ pageName(c.pageId) }}</template>
+            <!-- A case a model or the rules wrote from a page read, kept by a person (chat-plan.js): never mistaken for a recording. -->
+            <span v-if="c.source === 'generated'" class="ml-1 rounded-full border border-brand/20 bg-brand-50 px-2 py-0.5 text-[11px] text-brand-2">drafted from a page read</span>
           </p>
         </div>
         <div class="ml-auto flex shrink-0 gap-2">
