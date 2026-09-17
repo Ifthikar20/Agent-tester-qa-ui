@@ -29,7 +29,7 @@ import { findApiKey, createResolver, createBudget, MODEL as MONITOR_MODEL } from
 import { llmModeFrom, compactSnapshot, previewSpec } from './monitor-rules.js';
 import { redactWith } from './redact.js';
 import * as chat from './chat.js';
-import { findApiKey as findChatApiKey, createResolver as createChatResolver, chatModeFrom, MODEL as CHAT_MODEL } from './chat-resolver.js';
+import { createResolver as createChatResolver, chatModeFrom, MODEL as CHAT_MODEL } from './chat-resolver.js';
 
 const require = createRequire(import.meta.url);
 const PORT = Number(process.env.PORT) || 3000;
@@ -105,26 +105,24 @@ const BLOCK_PRIVATE = process.env.GC_BLOCK_PRIVATE != null
 const HEADED = /^(1|true|yes|on)$/i.test(process.env.HEADED ?? '');
 
 /**
+ * ONE key for the two layers that may call a model — agentic monitoring
+ * (monitor-resolver.js) and the chat (chat-resolver.js) — read ONCE, here:
+ * the environment, else ANTHROPIC_API_KEY alone out of .env.local. Then it is
+ * taken out of the environment, once: Playwright starts the browser with this
+ * process's environment, and the browser is the part of the runner that
+ * renders pages other people choose. Each layer holds the key only inside its
+ * resolver; nothing prints it — every banner line says "key found" and where.
+ * scripts/check-keys.js proves both layers see it and the browser does not.
+ */
+const API_KEY = findApiKey({ env: process.env, root: fileURLToPath(new URL('./', import.meta.url)) });
+delete process.env.ANTHROPIC_API_KEY;
+/**
  * Agentic monitoring's mind (monitor-rules.js, monitor-resolver.js): Claude
  * when a key is here, the mock compiler and judge otherwise, and
  * GC_MONITOR_LLM to say so explicitly — a word the runner does not know stops
  * it here, never read as off.
- *
- * The key is found once (the environment, else ANTHROPIC_API_KEY alone out of
- * .env.local) and held only inside the resolver. It is then taken OUT of the
- * environment: Playwright starts the browser with this process's environment,
- * and the browser is the part of the runner that renders pages other people
- * choose. Nothing that prints ever sees the key, only where it came from.
  */
-/**
- * The chat's key (chat-resolver.js), read HERE — before monitoring, just
- * below, takes ANTHROPIC_API_KEY out of the environment — and only read: the
- * delete stays where it is, so the browser is started without the key as
- * before. Held inside the resolver alone; the banner says where it came from.
- */
-const CHAT_KEY = findChatApiKey({ env: process.env, root: fileURLToPath(new URL('./', import.meta.url)) });
-const MONITOR_KEY = findApiKey({ env: process.env, root: fileURLToPath(new URL('./', import.meta.url)) });
-delete process.env.ANTHROPIC_API_KEY;
+const MONITOR_KEY = API_KEY;
 const MONITOR_LLM = llmModeFrom({ env: process.env, haveKey: Boolean(MONITOR_KEY.key) });
 if (MONITOR_LLM.error) {
   console.error(`\n  ${MONITOR_LLM.error}\n`);
@@ -145,6 +143,7 @@ const monitorBudget = createBudget({ max: MONITOR_AI_PER_DAY });
  * off. The budget is the process's, in memory: a ceiling against a runaway
  * conversation, not billing.
  */
+const CHAT_KEY = API_KEY;
 const CHAT = chatModeFrom({ env: process.env, haveKey: Boolean(CHAT_KEY.key) });
 if (CHAT.error) {
   console.error(`\n  ${CHAT.error}\n`);
@@ -1155,6 +1154,36 @@ app.post('/api/monitors/preview', (req, res) => {
   if (!spec) return res.status(400).json({ ok: false, error: 'ruleText is required' });
   res.json({ ok: true, spec });
 });
+/**
+ * The same sentence, compiled by Claude on request — one call, from the
+ * daily budget — so a person sees what the model makes of it BEFORE saving,
+ * where the preview above is the mock's instant reading. Nothing is kept.
+ * The element's markup excerpt is read off the open page when the picked
+ * element is on it, as it would be for the monitor itself. The mock's spec
+ * rides along with a refusal, so the panel always has something to show.
+ */
+app.post('/api/monitors/compile', async (req, res) => {
+  const body = req.body ?? {};
+  const mock = previewSpec(body);
+  if (!mock) return res.status(400).json({ ok: false, error: 'ruleText is required' });
+  if (monitoring.llmState().mode !== 'claude' || !monitorResolver) {
+    return res.status(409).json({ ok: false, error: 'no_model', message: 'This runner compiles rules with the mock compiler only — set ANTHROPIC_API_KEY for Claude', spec: mock });
+  }
+  if (!monitorBudget.take()) return res.status(429).json({ ok: false, error: 'budget', message: 'The daily AI budget is spent; the rules compiled it instead', spec: mock });
+  const engine = monitorsOf(req);
+  const selector = String(body.selector ?? '').slice(0, monitoring.SELECTOR_MAX);
+  const onPage = driver.sees(req.space.org) && monitorAgent?.alive() && !!currentUrl();
+  const excerpt = onPage && selector ? engine.cleanExcerpt(await monitorAgent.excerpt({ selector, fingerprint: body.fingerprint ?? null }).catch(() => null)) : null;
+  const base = body.baseline && typeof body.baseline === 'object' && !Array.isArray(body.baseline) ? engine.cleanSnapshot({ ...body.baseline }) : null;
+  const element = {
+    tag: String(body.tag ?? base?.tag ?? '').slice(0, 40), selector,
+    label: engine.redact(String(body.label ?? '')).slice(0, monitoring.LABEL_MAX),
+    textPreview: String(base?.text ?? '').slice(0, 120), excerpt,
+  };
+  const spec = await monitorResolver.compile({ ruleText: String(body.ruleText).slice(0, monitoring.RULE_MAX), element, baseline: base });
+  if (!spec) return res.status(503).json({ ok: false, error: 'unavailable', message: `Claude did not answer: ${monitorResolver.unavailable ?? 'unavailable'}`, spec: mock });
+  res.json({ ok: true, spec });
+});
 app.post('/api/monitors', async (req, res) => {
   if (!pageIsOurs(req, res)) return;
   try {
@@ -1743,6 +1772,8 @@ async function newSession() {
         snapshot,
         label: engine.redact(String(info.label ?? '')).slice(0, monitoring.LABEL_MAX),
         url: info.url ?? currentUrl(),
+        // Where it sits — its ancestors, outermost first (core.js pathOf) — so the panel can say.
+        path: Array.isArray(info.path) ? info.path.slice(0, 12).map((s) => engine.redact(String(s)).slice(0, 80)) : [],
         // What the page could not read about it, if anything (picker.js select).
         readError: info.readError ? String(info.readError).slice(0, 200) : null,
       });
