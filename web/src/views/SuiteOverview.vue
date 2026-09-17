@@ -49,7 +49,8 @@ watch(
   () => [live.monitors.length, live.incidents.length, live.openIncidents, live.monitors.map((m) => m.state).join()],
   () => loadWatching(suite.value?.id),
 );
-const openIssues = computed(() => watching.value?.incidents.filter((i) => i.status === 'open').length ?? 0);
+// Unresolved, not merely `open`: an incident Claude is still judging counts until it is settled.
+const openIssues = computed(() => watching.value?.incidents.filter((i) => i.status !== 'resolved').length ?? 0);
 const monitorNote = computed(() => {
   if (!watching.value) return '';
   if (!watching.value.monitors.length) return 'nothing watched yet';

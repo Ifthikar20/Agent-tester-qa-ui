@@ -12,7 +12,11 @@
  * `entitlement` wants a bigger plan, a 409 `chat_busy` wants the reply being
  * written to finish, and a 403 `switched_off` wants nothing at all — the
  * operator turned the feature off. The view offers the right button — or the
- * right sentence — instead of a red box.
+ * right sentence — instead of a red box. And the parsed answer rides along as
+ * `err.body` for the few refusals that carry more than a sentence: a compile
+ * the runner would not send to Claude (409 `no_model`, 429 `budget`, 503
+ * `unavailable`) says why in `message` and hands back the mock's `spec`, so
+ * the panel still has checks to show.
  *
  * Every path goes through `apiUrl`, which is the identity function while the
  * backend serves this app and a real origin once it does not. Writing the
@@ -46,6 +50,7 @@ async function req(path, { method = 'GET', body } = {}) {
     if (res.status === 401) useSession().forgetToken();
     const err = new Error(data.error || `${method} ${path} failed (${res.status})`);
     err.status = res.status;
+    err.body = data;
     if (data.needsOrigin) err.needsOrigin = data.needsOrigin;
     // The plan said no (docs/AUTH.md §10): which limit, and which plan it is.
     if (res.status === 402 && data.error === 'entitlement') {
@@ -160,6 +165,10 @@ export const api = {
   // The checks a rule would compile to, before the monitor exists — the
   // script shown under the sentence as it is typed. Nothing is kept.
   previewMonitor:  (body) => req('/api/monitors/preview', { method: 'POST', body }),
+  // The same sentence compiled by Claude, on request and from the daily
+  // budget, so what the model makes of it is seen before the monitor exists.
+  // A refusal throws with `err.body.message` and the mock's `err.body.spec`.
+  compileMonitor:  (body) => req('/api/monitors/compile', { method: 'POST', body }),
   removeMonitor:   (id) => req(`/api/monitors/${id}`, { method: 'DELETE' }),
   pauseMonitor:    (id) => req(`/api/monitors/${id}/pause`, { method: 'POST' }),
   resumeMonitor:   (id) => req(`/api/monitors/${id}/resume`, { method: 'POST' }),

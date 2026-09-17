@@ -128,9 +128,43 @@ export function specChips(m) {
   const out = (m.spec?.checks ?? []).map((c) => ({ text: chipText(c), tone: 'neutral', title: c.message ?? '' }));
   if (m.specSource === 'provisional') out.push({ text: 'compiling with Claude…', tone: 'info', title: 'The mock compiler’s checks run meanwhile' });
   else if (m.specSource === 'claude') out.push({ text: 'compiled by Claude', tone: 'info', title: m.spec?.summary ?? '' });
+  // The mock's checks, and nothing went wrong on the way: said, so no card
+  // leaves "who compiled this?" unanswered. Gone wrong, the fallback chip says.
+  else if (m.specSource === 'mock' && !m.specError) out.push({ text: 'compiled by rules', tone: 'neutral', title: 'the mock compiler’s checks' });
   if (m.specError) out.push({ text: 'mock fallback', tone: 'warn', title: m.specError });
-  if (m.spec?.needsLlmJudgment) out.push({ text: 'needs judgment', tone: 'warn', title: m.spec.judgmentHint ?? '' });
+  // A spec with clauses says which clause is judged (clauseChips); the one
+  // chip is for monitors written before clauses were kept.
+  if (m.spec?.needsLlmJudgment && !m.spec.clauses?.length) out.push({ text: 'needs judgment', tone: 'warn', title: m.spec.judgmentHint ?? '' });
   return out;
+}
+
+/** A clause as it fits on a chip: whole up to ~70 characters, then an ellipsis. */
+const CLAUSE_CHIP_MAX = 70;
+const clip = (t) => (t.length > CLAUSE_CHIP_MAX ? `${t.slice(0, CLAUSE_CHIP_MAX - 1).trimEnd()}…` : t);
+
+/**
+ * One chip per clause of the rule as the engineer wrote it, in order, saying
+ * what became of it: the checks it turned into, a call the runner makes on
+ * every confirmed change (or cannot make, without a key), or words nobody
+ * understood. This is the honest half of a spec — a clause that quietly
+ * vanished in compilation is a rule nobody is checking, and the chips are
+ * where that would show. Older specs have no clauses and get no chips.
+ */
+export function clauseChips(spec, llmMode) {
+  const checks = spec?.checks ?? [];
+  return (spec?.clauses ?? []).map((c) => {
+    const text = clip(String(c.text ?? '').trim());
+    if (c.outcome === 'checks') {
+      const named = (c.checkIds ?? []).map((id) => checks.find((k) => k.id === id)?.message).filter(Boolean);
+      return { text: `✓ ${text}`, tone: 'neutral', title: named.join(' · ') };
+    }
+    if (c.outcome === 'judgment') {
+      return llmMode === 'claude'
+        ? { text: `judged on change: ${text}`, tone: 'info', title: 'Claude reads the markup before and after each confirmed change and decides' }
+        : { text: `needs a key to judge: ${text}`, tone: 'warn', title: 'set ANTHROPIC_API_KEY — meanwhile the element is watched for any change' };
+    }
+    return { text: `not understood: ${text}`, tone: 'warn', title: 'No check came of these words — try saying it another way' };
+  });
 }
 
 /** `fontSize: 16 → 36`, one per metric that moved. */
@@ -147,8 +181,11 @@ const TONES = {
 };
 export const stateTone = (state) => TONES[state] ?? 'bg-ink/5 text-ink-2';
 
-/** The pill on an incident card. */
+/** The pill on an incident card. `title` is there when the word needs a sentence. */
 export function incidentPill(inc) {
+  // A change on a judged clause was confirmed and Claude has been asked: not
+  // yet a violation, not yet fine. Counted as unresolved until it is one.
+  if (inc.status === 'judging') return { label: 'Judging…', tone: 'bg-brand-50 text-brand-2', title: 'Claude is deciding whether this change breaks the rule' };
   if (inc.status === 'open') {
     return inc.type === 'missing' ? { label: 'missing', tone: 'bg-warn/10 text-warn' } : { label: 'open', tone: 'bg-critical/10 text-critical' };
   }

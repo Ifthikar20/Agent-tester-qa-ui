@@ -106,11 +106,19 @@ export const useLive = defineStore('live', {
     monitors: [],       // PublicMonitor, newest first
     incidents: [],      // Incident, newest first, capped
     picking: false,     // the runner's picker is armed on the page
-    picked: null,       // { selector, fingerprint, snapshot, label, url, readError, shot } from monitor.selected (+ monitor.shot)
+    picked: null,       // { selector, fingerprint, snapshot, label, url, path, readError, shot } from monitor.selected (+ monitor.shot)
     pickError: null,    // a sentence for the Pick button, from a refusal
     hover: null,        // { describe, tag, text, w, h, fontSize }: what the picker is over, while picking
     pickMiss: null,     // a sentence: the last click while picking chose nothing (an iframe, say)
     monitoring: null,   // the /api/monitoring summary: { llm, budget, counts, picking }
+    /**
+     * Claude's compile landing on a saved monitor (monitor.compiled), by
+     * monitor id: { at, source, summary }. A card flashes it for a few
+     * seconds, because the checks a person approved in the preview were the
+     * mock's and these are not the same checks. Replaced, never mutated, so a
+     * view's watch sees each landing.
+     */
+    compiled: {},
     /**
      * Help & support (support.js): whether support access is on for this
      * organisation, as the runner last said. Loaded once the socket is up and
@@ -129,8 +137,13 @@ export const useLive = defineStore('live', {
      * the server's own default is the right answer and it may not be 420.
      */
     paceMs: (s) => (s.pace === 'fast' ? 0 : undefined),
-    /** Open incidents, for the sidebar's dot and the monitoring page's count. */
-    openIncidents: (s) => s.incidents.filter((i) => i.status === 'open').length,
+    /**
+     * Unresolved incidents, for the sidebar's dot and the monitoring page's
+     * count. `judging` counts: Claude has been asked whether the change
+     * breaks the rule, and until it answers the incident is nobody's to
+     * dismiss.
+     */
+    openIncidents: (s) => s.incidents.filter((i) => i.status !== 'resolved').length,
     /**
      * The navigation that produced the address we are showing — or none.
      *
@@ -353,7 +366,7 @@ export const useLive = defineStore('live', {
           this.url = ev.url; this.origins = ev.origins;
           // Another organisation's socket (an org switch reconnects with a
           // new ticket): its monitors are not ours to show.
-          if (this.org && ev.org && this.org !== ev.org) { this.monitors = []; this.incidents = []; this.picked = null; this.monitoring = null; this.home = null; }
+          if (this.org && ev.org && this.org !== ev.org) { this.monitors = []; this.incidents = []; this.picked = null; this.monitoring = null; this.home = null; this.compiled = {}; }
           this.org = ev.org ?? null;
           if ('picking' in ev) this.picking = !!ev.picking;
           this.back = !!ev.back;
@@ -473,6 +486,8 @@ export const useLive = defineStore('live', {
           this.picked = {
             selector: ev.selector, fingerprint: ev.fingerprint ?? null, snapshot: ev.snapshot ?? null, label: ev.label ?? '',
             url: ev.url ?? this.url, readError: ev.readError ?? null, shot: null,
+            // Where it sits: its ancestors, outermost first, like ['body', 'main', 'div.hero'].
+            path: Array.isArray(ev.path) ? ev.path : [],
           };
           break;
         // The clip of the picked element, a moment after the pick. Set in
@@ -488,6 +503,11 @@ export const useLive = defineStore('live', {
           break;
         }
         case 'monitor.changed': this.upsertMonitor(ev.monitor); break;
+        // Claude's checks replaced the mock's on a saved monitor; the
+        // monitor.changed with the new spec follows on its own.
+        case 'monitor.compiled':
+          this.compiled = { ...this.compiled, [ev.monitorId]: { at: Date.now(), source: ev.source, summary: ev.summary } };
+          break;
         case 'monitor.gone': this.dropMonitor(ev.id); break;
         case 'incident.opened':
         case 'incident.updated':
