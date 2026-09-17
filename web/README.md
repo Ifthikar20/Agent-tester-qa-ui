@@ -51,6 +51,10 @@ Cross-origin also needs the backend told which origin may call it
 (`GC_WEB_ORIGIN`), or the browser blocks the requests before they leave.
 `.env.example` has the details.
 
+How this app fits the whole — the runner it talks to, the control plane, the one
+socket and the stores that read it — is drawn in
+[../docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md).
+
 ## Layout
 
 ```

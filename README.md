@@ -196,7 +196,8 @@ cart and charges for one. Both bugs turn their run red.
 
 The whole pipeline, editable: [`docs/ghostclick-end-to-end.drawio`](docs/ghostclick-end-to-end.drawio)
 — open it at [app.diagrams.net](https://app.diagrams.net) or with the draw.io
-VS Code extension.
+VS Code extension. The map of the parts as they are built — every module, store,
+route and event, and how they talk — is [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 
 Three loops share one Chrome. Video flows right-to-left, control flows
@@ -1791,6 +1792,7 @@ silently inside someone else's docs.
 | `auth/` | Django: users, sessions, SSO later — identity and nothing else |
 | `auth/accounts/tokens.py` | mints the HS256 token the runner accepts, stdlib only |
 | `auth.js` | verifies it — verify-only, so the runner cannot authorise itself |
+| `docs/ARCHITECTURE.md` | the map of the system as built: the three projects, the runner process, tenancy, a run, teach mode, fixes, monitoring, the chat, the models, the UI, the checks |
 | `docs/BOUNDARY.md` | the four rules that keep frontend and backend separable |
 | `docs/DEPLOY.md` | putting it on AWS, and why auth is not optional once you do |
 | `Dockerfile`, `docker/` | the runner image, the compose stack, the Caddyfile |
