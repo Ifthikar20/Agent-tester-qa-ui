@@ -1276,6 +1276,16 @@ app.post('/api/chat/turns', (req, res) => {
   } catch (err) { fail(res, err); }
 });
 /**
+ * Stop, so the UI's Stop button has an answer here too. What it ends — a batch
+ * of drafted tests, between attempts (chat-plan.js) — needs the deployed
+ * runner's plan actions (readPage, planPage, runDrafts), which this copy does
+ * not carry: the `plan_page_tests` tool does not exist here, and the answer
+ * is the turn asked to stop, or null when nothing is running.
+ */
+app.post('/api/chat/stop', (req, res) => {
+  try { sendOk(res, { stopping: chat.stop(req.space) }); } catch (err) { fail(res, err); }
+});
+/**
  * Redirect shapes worth testing, for the bundled demo.
  *
  * Every one of these is a link that "works" — you land on a page, the URL looks

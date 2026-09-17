@@ -42,8 +42,13 @@ export function forOrg(org) {
   const store = {
     org,
 
-    /** @param {{suite:string, suiteId?:string, caseId?:string, caseName?:string, url:string, ms:number, results:Array}} run */
-    record({ suite, suiteId, caseId, caseName, url, ms, results }) {
+    /**
+     * @param {{suite:string, suiteId?:string, caseId?:string, caseName?:string, url:string, ms:number, results:Array, draft?:boolean}} run
+     *   `draft` is a case a model drafted and nobody has accepted (chat-plan.js):
+     *   kept, and counted by today() against the plan, but absent from every
+     *   total the dashboard shows and never a defect.
+     */
+    record({ suite, suiteId, caseId, caseName, url, ms, results, draft = false }) {
       const failed = results.filter((r) => !r.ok);
       const entry = {
         at: Date.now(),
@@ -63,6 +68,7 @@ export function forOrg(org) {
         // Just the first failure. A run stops at the first one anyway.
         error: failed[0]?.error?.split('\n')[0]?.slice(0, 240) ?? null,
         step: failed[0] ? failed[0].i : null,
+        ...(draft ? { draft: true } : {}),
       };
       all.push(entry);
       if (all.length > CAP) all = all.slice(-CAP);
@@ -109,7 +115,9 @@ export function forOrg(org) {
      */
     defects(days = 14) {
       const since = Date.now() - days * DAY_MS;
-      const runs = all.filter((r) => r.at >= since);
+      // A draft (chat-plan.js) is a model trying a case out: its failures are
+      // no defect and its passes close none.
+      const runs = all.filter((r) => r.at >= since && !r.draft);
 
       // When each case last passed, so a defect can say whether it is still live.
       const lastPass = new Map();
@@ -157,7 +165,9 @@ export function forOrg(org) {
      *   implementations that will disagree by next week.
      */
     summary(days = 14, suiteId = null) {
-      const runs = suiteId ? all.filter((r) => r.suiteId === suiteId) : all;
+      // A draft's attempts are a model trying a case out, not the project's
+      // record: they stay out of every number here (today() still counts them).
+      const runs = (suiteId ? all.filter((r) => r.suiteId === suiteId) : all).filter((r) => !r.draft);
       const now = Date.now();
       const since = now - (days - 1) * DAY_MS;
 
