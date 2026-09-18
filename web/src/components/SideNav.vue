@@ -158,22 +158,6 @@ const sectionOn = (x, s) => (x.query ? route.name === x.to && route.query.suite 
       </svg>
     </button>
 
-    <!-- The collapse control, at the top where a hand goes looking for it.
-         The mark above toggles too; both call the same action, so there is
-         nothing to keep in sync. -->
-    <button type="button" @click="ui.toggleNav()"
-            :title="rail ? 'Expand the sidebar' : 'Collapse the sidebar'"
-            :aria-label="rail ? 'Expand the sidebar' : 'Collapse the sidebar'"
-            :aria-expanded="!rail"
-            class="nav-item mb-3 hover:bg-ink/[0.04] hover:text-ink"
-            :class="rail ? 'nav-item-rail mx-2' : 'mx-3'">
-      <svg viewBox="0 0 16 16" class="size-4 shrink-0" fill="none" stroke="currentColor"
-           stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M2.5 3h11v10h-11zM6 3v10" />
-        <path :d="rail ? 'M9 6.5 10.5 8 9 9.5' : 'M10.5 6.5 9 8l1.5 1.5'" />
-      </svg>
-      <span v-if="!rail">Collapse</span>
-    </button>
 
     <!-- Workspace: the organisation you act for (docs/AUTH.md §10) — every
          suite, origin and run below is hers — with its plan, and whether the
