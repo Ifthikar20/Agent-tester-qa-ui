@@ -63,6 +63,8 @@ src/
   router.js      routes; every view is lazy except the console
   config.js      where the backend and the control plane are
   api.js         the HTTP surface, one function per endpoint
+  markdown.js    the little markdown a chat reply may use, parsed to a tree the
+                 page draws as text — never as HTML
   app.css        Tailwind v4 + the design tokens (brand, ink, surfaces)
   stores/
     live.js      the one WebSocket: frames, cursor, steps, console, navs

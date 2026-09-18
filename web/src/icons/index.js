@@ -46,6 +46,10 @@ export const GLYPHS = {
   org:     'M5.5 7.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM10.5 7.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM2 13c0-2 1.6-3.3 3.5-3.3S9 11 9 13M7.5 13c0-2 1.3-3.3 3-3.3S14 11 14 13',
   monitor: 'M1.5 8.5h2.8l1.6-4.2 2.4 7.4 2-5 1.3 1.8h3',
   chat:    'M2.5 3h11v7.5H7.5L4.5 13v-2.5h-2z',
+  // The chat's suggestion tiles (views/ChatView.vue): a list, a run, a draft.
+  list:    'M5.5 4.5h8M5.5 8h8M5.5 11.5h8M2.5 4.5h.01M2.5 8h.01M2.5 11.5h.01',
+  play:    'M4.5 2.8v10.4L13 8z',
+  spark:   'M8 2.2l1.5 4.3L13.8 8l-4.3 1.5L8 13.8l-1.5-4.3L2.2 8l4.3-1.5z',
 };
 
 /**

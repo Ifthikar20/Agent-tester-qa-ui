@@ -85,7 +85,7 @@ const stopped = computed(() => {
 </script>
 
 <template>
-  <div class="rounded-xl border border-hairline bg-ground px-3.5 py-3 text-[12.5px]">
+  <div class="rounded-xl border border-hairline bg-panel px-3.5 py-3 text-[12.5px]">
     <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
       <StatusPill :ok="ok" :label="ok === null ? 'Running' : null" size="sm" />
       <span class="min-w-0 truncate font-medium text-ink" :title="title">{{ title }}</span>
