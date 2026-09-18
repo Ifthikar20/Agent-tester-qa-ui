@@ -10,7 +10,7 @@
  *
  *   const guard = useGuarded();
  *   guard.run(() => session.changeEmail(email))   // 'ok' | 'reauthenticate' | 'error' | ...
- *   <ReauthSheet v-if="guard.flow" :flow="guard.flow" @done="guard.proved()" @cancel="guard.cancel()" />
+ *   <ReauthSheet v-if="guard.flow.value" :flow="guard.flow.value" @done="guard.proved()" @cancel="guard.cancel()" />
  *
  * `run` answers 'reauthenticate' when the sheet is up, whatever kind of
  * proof was asked for; the store's outcome is passed through otherwise.

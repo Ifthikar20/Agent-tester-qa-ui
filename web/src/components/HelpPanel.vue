@@ -49,7 +49,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
            role="dialog" aria-modal="true" aria-labelledby="help-title">
       <header class="flex items-center gap-3 border-b border-hairline px-5 py-4">
         <h2 id="help-title" class="text-[16px] font-medium">Help</h2>
-        <span class="text-[12.5px] text-ink-3">Answers first, documentation second, a person third.</span>
+        <span class="hidden text-[12.5px] text-ink-3 sm:inline">Answers first, documentation second, a person third.</span>
         <button type="button" class="ml-auto grid size-8 place-items-center rounded-full text-ink-3 hover:bg-ink/[0.05] hover:text-ink"
                 aria-label="Close help" title="Close (Esc)" @click="ui.closeHelp()">
           <svg viewBox="0 0 16 16" class="size-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">

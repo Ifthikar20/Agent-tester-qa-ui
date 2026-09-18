@@ -51,8 +51,11 @@ defineExpose({ focus: () => box.value?.focus() });
               class="block w-full resize-none bg-transparent px-2 py-1.5 text-[13.5px] leading-relaxed text-ink outline-none
                      placeholder:text-ink-3 disabled:cursor-not-allowed disabled:opacity-60"
               @input="emit('update:modelValue', $event.target.value)" @keydown.enter.exact.prevent="emit('submit')"></textarea>
-    <div class="flex items-center gap-2 px-1 pt-1">
-      <span class="truncate text-[11.5px] text-ink-3">Enter sends · Shift+Enter for a new line</span>
+    <!-- The hint gives way first (it grows into the room and truncates); the
+         notes and the buttons never shrink, and on a phone the row wraps under
+         them rather than pushing the send button out of the card. -->
+    <div class="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 pt-1">
+      <span class="min-w-0 flex-1 truncate text-[11.5px] text-ink-3">Enter sends · Shift+Enter for a new line</span>
       <span v-if="modelValue.length >= TEXT_MAX - 200" class="shrink-0 text-[11.5px] tabular-nums text-ink-3">{{ modelValue.length }}/{{ TEXT_MAX }}</span>
       <span v-if="otherTurn" class="shrink-0 text-[11.5px] text-ink-3">A reply is being written…</span>
       <div class="ml-auto flex shrink-0 items-center gap-2">

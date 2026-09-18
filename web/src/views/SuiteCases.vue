@@ -41,8 +41,9 @@ async function save(c) {
 }
 async function remove(c) {
   if (!confirm(`Delete "${c.name}"?`)) return;
-  await api.removeCase(suite.value.id, c.id);
-  await store.refresh();
+  error.value = null;
+  try { await api.removeCase(suite.value.id, c.id); await store.refresh(); }
+  catch (e) { error.value = e.message; }
 }
 async function add() {
   error.value = null;
@@ -93,7 +94,7 @@ const pageName = (id) => suite.value.pages.find((p) => p.id === id)?.name ?? nul
                 @click="fromRecorder">
           Use the recording ({{ live.recordedCount }} steps)
         </button>
-        <button class="rounded-full bg-brand hover:bg-brand-deep px-4 py-2 text-[13px] font-medium text-white"
+        <button class="rounded-full bg-brand px-4 py-2 text-[13px] font-medium text-white hover:bg-brand-deep"
                 @click="adding = !adding">{{ adding ? 'Cancel' : 'New case' }}</button>
       </div>
     </div>
@@ -115,14 +116,14 @@ const pageName = (id) => suite.value.pages.find((p) => p.id === id)?.name ?? nul
           <FlowBox v-model="draft.flow" :rows="10" />
         </Field>
       </div>
-      <button class="mt-4 rounded-full bg-brand hover:bg-brand-deep px-4 py-2 text-[13px] font-medium text-white disabled:bg-ink/[0.05] disabled:text-ink-3"
+      <button class="mt-4 rounded-full bg-brand px-4 py-2 text-[13px] font-medium text-white hover:bg-brand-deep disabled:bg-ink/[0.05] disabled:text-ink-3"
               :disabled="!draft.name || !draft.flow" @click="add">Save case</button>
     </section>
 
     <EmptyState v-if="!suite.cases.length && !adding" title="No cases yet"
-                body="Open the console, press Record, and drive the page by hand — the recorder names every element from the accessibility tree and hands you back a script." >
+                body="Open the console, press Record, and drive the page by hand — the recorder names every element from the accessibility tree and hands you back a script.">
       <RouterLink :to="{ path: '/console', query: { suite: suite.id, url: suite.pages[0]?.url } }"
-                  class="rounded-full bg-brand hover:bg-brand-deep px-4 py-2 text-[13.5px] font-medium text-white">Open the console</RouterLink>
+                  class="rounded-full bg-brand px-4 py-2 text-[13.5px] font-medium text-white hover:bg-brand-deep">Open the console</RouterLink>
     </EmptyState>
 
     <section v-for="c in suite.cases" :key="c.id" class="card mb-3 p-5">
@@ -151,11 +152,11 @@ const pageName = (id) => suite.value.pages.find((p) => p.id === id)?.name ?? nul
         <div class="mt-3">
           <Field label="Flow"><FlowBox v-model="edit.flow" :rows="12" /></Field>
         </div>
-        <button class="mt-4 rounded-full bg-brand hover:bg-brand-deep px-4 py-2 text-[13px] font-medium text-white" @click="save(c)">
+        <button class="mt-4 rounded-full bg-brand px-4 py-2 text-[13px] font-medium text-white hover:bg-brand-deep" @click="save(c)">
           Save
         </button>
       </div>
-      <FlowBox v-else :model-value="c.flow" :rows="Math.min(16, c.flow.split('\n').length)" readonly class="mt-3" />
+      <FlowBox v-else :model-value="c.flow" :rows="Math.min(16, String(c.flow ?? '').split('\n').length)" readonly class="mt-3" />
     </section>
   </div>
 </template>

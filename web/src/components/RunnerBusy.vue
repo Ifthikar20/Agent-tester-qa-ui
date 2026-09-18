@@ -15,7 +15,7 @@ const live = useLive();
 
 <template>
   <span v-if="compact && live.busy"
-        class="flex items-center gap-2 rounded-full border border-warn/30 bg-warn/10 px-3 py-1.5 text-[12.5px] font-medium text-warn"
+        class="flex items-center gap-2 whitespace-nowrap rounded-full border border-warn/30 bg-warn/10 px-3 py-1.5 text-[12.5px] font-medium text-warn"
         :title="`${live.driving.org} is driving the runner`">
     <span class="size-1.5 rounded-full bg-warn" /> Runner busy
   </span>

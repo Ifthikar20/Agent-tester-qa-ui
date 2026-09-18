@@ -45,8 +45,10 @@ export default {
           case 'h': return h('p', { class: b.level === 1 ? 'text-[15px] font-semibold' : 'font-semibold' }, [...inline(b.runs), ...tail]);
           case 'ul': return h('ul', { class: 'list-disc space-y-1 pl-5 marker:text-ink-3' }, items(b.items, tail));
           case 'ol': return h('ol', { class: 'list-decimal space-y-1 pl-5 tabular-nums marker:text-ink-3', start: b.start }, items(b.items, tail));
-          case 'table': return h('div', { class: 'overflow-x-auto' }, h('table', { class: 'w-full text-left text-[12.5px]' }, [
-            h('thead', { class: 'table-head' }, h('tr', null, b.head.map((c) => h('th', { class: 'px-2 py-1 font-medium' }, inline(c))))),
+          // A table keeps its words whole and scrolls sideways in its box: the root's
+          // break-anywhere would otherwise split "Expectations" down a narrow column.
+          case 'table': return h('div', { class: 'overflow-x-auto' }, h('table', { class: 'w-full text-left text-[12.5px] [overflow-wrap:normal]' }, [
+            h('thead', { class: 'table-head' }, h('tr', null, b.head.map((c) => h('th', { class: 'whitespace-nowrap px-2 py-1 font-medium' }, inline(c))))),
             h('tbody', null, b.rows.map((r) => h('tr', { class: 'border-t border-hairline' }, r.map((c) => h('td', { class: 'px-2 py-1 align-top' }, inline(c)))))),
           ]));
           case 'code': return h('pre', { class: 'overflow-x-auto rounded-lg border border-hairline bg-panel px-3 py-2 font-mono text-[12px] leading-relaxed' }, [h('code', null, b.text), ...tail]);

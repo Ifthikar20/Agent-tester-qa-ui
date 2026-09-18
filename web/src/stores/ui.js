@@ -15,11 +15,22 @@ import { DARK_QUERY, THEME_KEY, parseChoice, resolve } from '@/theme';
 
 const KEY = 'gc.nav.collapsed';
 const CHATS_KEY = 'gc.nav.chats';
+/**
+ * Below Tailwind's `md` the sidebar starts as its rail: on a phone the expanded
+ * 248px would leave a third of the screen for the page. A stored choice wins
+ * either way — toggleNav writes '1' and '0', so '0' is a choice too — and it
+ * is read once, at load: turning a phone does not re-decide.
+ */
+const NARROW_QUERY = '(max-width: 767px)';
 
 export const useUi = defineStore('ui', {
   state: () => ({
     navCollapsed: (() => {
-      try { return localStorage.getItem(KEY) === '1'; } catch { return false; }
+      try {
+        const saved = localStorage.getItem(KEY);
+        if (saved === '1' || saved === '0') return saved === '1';
+      } catch { /* private window */ }
+      try { return window.matchMedia(NARROW_QUERY).matches; } catch { return false; }
     })(),
     /**
      * Light, dark, or the device's (src/theme.js). `systemDark` is the device's

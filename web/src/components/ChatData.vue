@@ -127,7 +127,7 @@ const statusTone = (s) => (s === 'open' ? 'bg-critical/10 text-critical' : s ===
         <table class="w-full text-left">
           <thead class="table-head"><tr><th class="px-2 py-1.5 font-medium">Defect</th><th class="px-2 py-1.5 font-medium">Severity</th><th class="px-2 py-1.5 font-medium">Title</th><th class="px-2 py-1.5 font-medium">Cases</th><th class="px-2 py-1.5 font-medium">Hits</th><th class="px-2 py-1.5 font-medium">Last seen</th><th class="px-2 py-1.5 font-medium">Status</th></tr></thead>
           <tbody>
-            <tr v-for="r in view.rows" :key="r.id" class="border-t border-hairline align-top">
+            <tr v-for="(r, i) in view.rows" :key="i" class="border-t border-hairline align-top">
               <td class="whitespace-nowrap px-2 py-1.5 font-medium text-ink">{{ r.id ?? '—' }}</td>
               <td class="px-2 py-1.5 text-ink-2">{{ r.severity ?? '—' }}</td>
               <td class="px-2 py-1.5 text-ink">{{ cap(r.title, 100) }}</td>
@@ -148,7 +148,7 @@ const statusTone = (s) => (s === 'open' ? 'bg-critical/10 text-critical' : s ===
       <p v-if="view.target" class="mt-1 font-mono text-[11.5px] text-ink-2">{{ view.target }}</p>
       <p v-if="view.caseNames?.length" class="mt-2 text-ink-2"><span class="text-ink-3">Cases:</span> {{ view.caseNames.join(', ') }}<span v-if="view.suiteNames?.length" class="text-ink-3"> · in {{ view.suiteNames.join(', ') }}</span></p>
       <ul v-if="view.runs?.length" class="mt-2 space-y-0.5">
-        <li v-for="(r, i) in view.runs" :key="i" class="flex items-baseline gap-2 text-ink-2"><span class="w-16 shrink-0 text-ink-3">{{ at(r.at) }}</span><span>{{ r.caseName ?? 'a run' }}<span v-if="r.error" class="text-ink-3"> — {{ cap(r.error, 90) }}</span></span></li>
+        <li v-for="(r, i) in view.runs" :key="i" class="flex items-baseline gap-2 text-ink-2"><span class="min-w-16 shrink-0 whitespace-nowrap text-ink-3">{{ at(r.at) }}</span><span class="min-w-0 [overflow-wrap:anywhere]">{{ r.caseName ?? 'a run' }}<span v-if="r.error" class="text-ink-3"> — {{ cap(r.error, 90) }}</span></span></li>
       </ul>
     </template>
 
@@ -206,7 +206,7 @@ const statusTone = (s) => (s === 'open' ? 'bg-critical/10 text-critical' : s ===
       <table v-if="view.rows?.length" class="w-full text-left">
         <thead class="table-head"><tr><th class="px-2 py-1.5 font-medium">Suite</th><th class="px-2 py-1.5 font-medium">Page</th><th class="px-2 py-1.5 font-medium">URL</th><th class="px-2 py-1.5 font-medium">Targets</th><th class="px-2 py-1.5 font-medium">Links</th><th class="px-2 py-1.5 font-medium">Scanned</th></tr></thead>
         <tbody>
-          <tr v-for="r in view.rows" :key="`${r.suiteId}/${r.pageId}`" class="border-t border-hairline">
+          <tr v-for="(r, i) in view.rows" :key="i" class="border-t border-hairline">
             <td class="px-2 py-1.5 text-ink-2">{{ r.suite }}</td>
             <td class="px-2 py-1.5 font-medium text-ink">{{ r.name }}</td>
             <td class="px-2 py-1.5 font-mono text-[11.5px] text-ink-2">{{ cap(r.url, 60) }}</td>

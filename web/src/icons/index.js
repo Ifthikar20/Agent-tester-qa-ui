@@ -75,6 +75,3 @@ for (const [path, url] of Object.entries(files)) {
 
 /** What was dropped in for this name, or null if it is still line art. */
 export const png = (name) => PNG[name] ?? null;
-
-/** Whether anything at all will draw for this name — a PNG or a glyph. */
-export const has = (name) => !!(PNG[name] || GLYPHS[name]);

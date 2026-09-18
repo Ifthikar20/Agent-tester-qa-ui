@@ -57,6 +57,7 @@ export function runs(line) {
  *   | {type:'h', level: number, runs: ReturnType<typeof runs>}
  *   | {type:'ul', items: Array<ReturnType<typeof runs>>}
  *   | {type:'ol', start: number, items: Array<ReturnType<typeof runs>>}
+ *   | {type:'table', head: Array<ReturnType<typeof runs>>, rows: Array<Array<ReturnType<typeof runs>>>}
  *   | {type:'code', text: string}} Block
  * @returns {Block[]}
  */

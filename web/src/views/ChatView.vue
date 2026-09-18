@@ -148,13 +148,14 @@ const ask = (text, opts) => { if (canSend.value) chat.send(text, opts); };
  */
 const saved = ref(new Set());
 const saving = ref(null);
-const keyOf = (r) => `${r.suiteId}:${r.candidate ?? r.caseName}:${r.at}`;
-async function keep(r) {
+/** A card's mark, by its place in its message: not every run carries `at`, and a name can repeat. */
+const keyOf = (m, i) => `${m.id}:${i}`;
+async function keep(r, m, i) {
   if (!r?.flow || !r.suiteId || saving.value) return;
-  saving.value = keyOf(r);
+  saving.value = keyOf(m, i);
   try {
     await api.addCase(r.suiteId, { name: r.caseName, pageId: r.pageId ?? null, flow: r.flow, source: 'generated' });
-    saved.value = new Set([...saved.value, keyOf(r)]);
+    saved.value = new Set([...saved.value, keyOf(m, i)]);
   } catch (e) {
     chat.error = e.message;
   } finally {
@@ -183,7 +184,9 @@ function measure() {
 const reduced = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 function toBottom(behavior = 'smooth') {
   const el = scroller.value;
-  if (!el) return;
+  // Nothing to keep in view before the first message — and on a phone the
+  // empty state is taller than the screen, so "the end" would hide the hero.
+  if (!el || empty.value) return;
   const smooth = behavior === 'smooth' && !reduced();
   if (smooth) {
     settling.value = true;
@@ -203,8 +206,9 @@ watch([() => messages.value.length, () => chat.turn?.text, () => chat.turn?.tool
   lastCount = count;
   if (own || atBottom.value) nextTick(() => toBottom(own ? 'smooth' : 'auto'));
 });
-// Opening a conversation lands at its end, without a journey from the top.
-watch(() => chat.current?.id, () => { lastCount = messages.value.length; nextTick(() => toBottom('auto')); });
+// Opening a conversation lands at its end, without a journey from the top;
+// the saved marks belonged to the one that was open.
+watch(() => chat.current?.id, () => { saved.value = new Set(); lastCount = messages.value.length; nextTick(() => toBottom('auto')); });
 // The composer remounts in the dock when the first message lands: keep the caret in it.
 watch(empty, (e) => { if (!e) nextTick(() => composer.value?.focus()); });
 
@@ -227,11 +231,12 @@ onBeforeUnmount(() => { ro?.disconnect(); clearTimeout(settleTimer); });
   <div class="flex h-full min-h-0 flex-col" :data-chat="empty ? 'empty' : 'conversation'">
     <TopBar :crumbs="crumbs">
       <template #actions>
-        <span v-if="mode" class="hidden items-center gap-1.5 rounded-full border px-3 py-1 text-[12px] font-medium md:inline-flex"
+        <!-- From lg, where the column is at its cap beside the sidebar; narrower, the bar has no room for it. -->
+        <span v-if="mode" class="hidden max-w-[14rem] items-center gap-1.5 rounded-full border px-3 py-1 text-[12px] font-medium lg:inline-flex"
               :class="mode.claude ? 'border-brand/20 bg-brand-50 text-brand-2' : 'border-hairline bg-panel text-ink-2'"
               :title="mode.title">
-          {{ mode.label }}
-          <span v-if="mode.claude && chat.budget" class="font-normal text-ink-3">{{ chat.budget.used }}/{{ chat.budget.max }}</span>
+          <span class="min-w-0 truncate">{{ mode.label }}</span>
+          <span v-if="mode.claude && chat.budget" class="shrink-0 font-normal text-ink-3">{{ chat.budget.used }}/{{ chat.budget.max }}</span>
         </span>
         <Btn variant="ghost" size="sm" :disabled="!chat.current"
              title="Start another conversation; this one stays under Recent chats in the sidebar" @click="startFresh">+ New chat</Btn>
@@ -240,8 +245,11 @@ onBeforeUnmount(() => { ro?.disconnect(); clearTimeout(settleTimer); });
 
     <!-- The transcript owns the scroll, so the composer below it never scrolls away. -->
     <div ref="scroller" class="min-h-0 flex-1 overflow-y-auto" @scroll.passive="measure">
-      <div ref="column" class="mx-auto w-full max-w-3xl px-6 pb-6 pt-8"
-           :class="ready && empty && 'flex min-h-full flex-col justify-center'">
+      <!-- The empty state sits mid-screen by auto margins, not justify-center: margins
+           give way when the block is taller than the screen (a phone), so its top stays
+           reachable, where centring would push it up past the scroll. -->
+      <div ref="column" class="mx-auto w-full max-w-3xl px-4 pb-6 pt-8 sm:px-6"
+           :class="ready && empty && 'flex min-h-full flex-col'">
         <p v-if="chat.available === null && chat.loading" class="text-[13.5px] text-ink-3">Asking the runner…</p>
 
         <!-- A runner from before the chat existed: it answers 404, and that is all it can say. -->
@@ -261,7 +269,7 @@ onBeforeUnmount(() => { ro?.disconnect(); clearTimeout(settleTimer); });
             rest of the product is unaffected: run history, defects and the console answer the same
             questions the long way round.
           </p>
-          <div class="mt-3 flex gap-2">
+          <div class="mt-3 flex flex-wrap gap-2">
             <RouterLink to="/defects" class="rounded-full border border-hairline px-4 py-2 text-[13px] hover:border-ink/25">Defects</RouterLink>
             <RouterLink to="/dashboard" class="rounded-full border border-hairline px-4 py-2 text-[13px] hover:border-ink/25">Run history</RouterLink>
           </div>
@@ -272,8 +280,8 @@ onBeforeUnmount(() => { ro?.disconnect(); clearTimeout(settleTimer); });
           <RunnerBusy class="mb-4" />
 
           <!-- nothing asked yet: the question, and six things worth asking ------ -->
-          <section v-if="empty" class="py-6">
-            <h1 class="display text-balance text-center text-4xl">Ask the runner what it knows.</h1>
+          <section v-if="empty" class="my-auto py-6">
+            <h1 class="display text-balance text-center text-3xl sm:text-4xl">Ask the runner what it knows.</h1>
             <p class="mx-auto mt-3 max-w-xl text-balance text-center text-[14.5px] leading-relaxed text-ink-2">
               Defects, runs, suites and saved cases — or name a page to test. Every number comes from the
               runner's own records.
@@ -282,7 +290,7 @@ onBeforeUnmount(() => { ro?.disconnect(); clearTimeout(settleTimer); });
                           :busy="!!chat.turn" :running="!!chat.turn?.running" :stopping="!!chat.stopping" :other-turn="otherTurn"
                           @submit="submit" @stop="chat.stop()" />
             <p v-if="chat.error" class="mt-2 rounded-lg border border-critical/25 bg-critical/5 px-3 py-2 text-[12.5px] text-critical">{{ chat.error }}</p>
-            <div class="mt-6 grid gap-3 sm:grid-cols-2 md:grid-cols-3">
+            <div class="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               <button v-for="t in tiles" :key="t.text" type="button" data-tile :disabled="!canSend || otherTurn"
                       class="group flex items-start gap-3 rounded-xl border border-hairline bg-panel px-4 py-3.5 text-left
                              hover:border-ink/25 hover:bg-ink/[0.02] disabled:cursor-not-allowed disabled:opacity-60"
@@ -313,7 +321,10 @@ onBeforeUnmount(() => { ro?.disconnect(); clearTimeout(settleTimer); });
               <ChatData v-for="(d, i) in m.data ?? []" :key="`${m.id}-d${i}`" :view="d" class="mt-3 w-full" />
 
               <!-- The agents that answered, one badge each (agents.js), with what they did. -->
-              <ul v-if="m.role === 'assistant' && m.tools?.length" class="mt-2 flex flex-wrap gap-1.5">
+              <!-- w-full on these rows is load-bearing: a wrapping row sized to its own
+                   content is as wide as its unwrapped chips, and the chips' max-w-full
+                   then caps nothing. A definite width is what makes them wrap and truncate. -->
+              <ul v-if="m.role === 'assistant' && m.tools?.length" class="mt-2 flex w-full flex-wrap gap-1.5">
                 <li v-for="c in m.tools" :key="c.id"
                     class="inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11.5px]"
                     :class="c.refused ? 'border-warn/40 text-warn' : c.ok === false ? 'border-critical/40 text-critical' : 'border-hairline text-ink-2'"
@@ -324,8 +335,8 @@ onBeforeUnmount(() => { ro?.disconnect(); clearTimeout(settleTimer); });
                 </li>
               </ul>
               <!-- Where a reply was read from: the documentation sections it cited (chat.js sources). -->
-              <div v-if="m.sources?.length" class="mt-2 flex flex-wrap gap-1.5">
-                <span v-for="s in m.sources" :key="`${s.file}#${s.heading}`"
+              <div v-if="m.sources?.length" class="mt-2 flex w-full flex-wrap gap-1.5">
+                <span v-for="(s, i) in m.sources" :key="`${i}-${s.file}#${s.heading}`"
                       class="inline-flex max-w-full items-center gap-1.5 rounded-full border border-hairline bg-panel px-2.5 py-0.5 text-[11.5px] text-ink-2"
                       :title="`Read from ${s.file}, under “${s.heading}”`">
                   <svg viewBox="0 0 16 16" class="size-3 shrink-0 text-ink-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -337,10 +348,10 @@ onBeforeUnmount(() => { ro?.disconnect(); clearTimeout(settleTimer); });
               </div>
               <div v-if="m.runs?.length" class="mt-3 w-full space-y-2">
                 <ChatRunCard v-for="(r, i) in m.runs" :key="`${m.id}-${i}`" :run="r"
-                             :saved="saved.has(keyOf(r))" :saving="saving === keyOf(r)" @save="keep(r)" />
+                             :saved="saved.has(keyOf(m, i))" :saving="saving === keyOf(m, i)" @save="keep(r, m, i)" />
               </div>
               <!-- A follow-up already written: pressed rather than typed out again. -->
-              <div v-if="m.offers?.length" class="mt-3 flex flex-wrap gap-1.5">
+              <div v-if="m.offers?.length" class="mt-3 flex w-full flex-wrap gap-1.5">
                 <Btn v-for="o in m.offers" :key="o.text" variant="ghost" size="sm"
                      :disabled="!canSend || !!chat.turn || otherTurn" :title="o.text" @click="ask(o.text)">{{ o.label }}</Btn>
               </div>
@@ -378,7 +389,7 @@ onBeforeUnmount(() => { ro?.disconnect(); clearTimeout(settleTimer); });
     </div>
 
     <!-- the composer, docked ------------------------------------------------- -->
-    <div v-if="ready && !empty" class="relative shrink-0 bg-ground px-6 pb-3 pt-2">
+    <div v-if="ready && !empty" class="relative shrink-0 bg-ground px-4 pb-3 pt-2 sm:px-6">
       <button type="button" aria-label="Scroll to the latest message" title="Back to the latest message"
               class="absolute -top-12 left-1/2 z-10 grid size-9 -translate-x-1/2 place-items-center rounded-full border border-hairline
                      bg-panel text-ink-2 transition-opacity duration-150 hover:border-ink/25 hover:text-ink"
@@ -398,6 +409,5 @@ onBeforeUnmount(() => { ro?.disconnect(); clearTimeout(settleTimer); });
         </p>
       </div>
     </div>
-
   </div>
 </template>

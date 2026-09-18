@@ -36,7 +36,7 @@ const verdict = computed(() => {
   if (!r?.verdict || r.verdict === 'passed') return null;
   const hint = r.hint ? ` — ${r.hint}` : '';
   switch (r.verdict) {
-    case 'test_script': return r.ok ? { tone: 'text-ink-2', text: `the test was wrong — fixed and re-run once, then passed` } : { tone: 'text-warn', text: `the test was wrong${hint}` };
+    case 'test_script': return r.ok ? { tone: 'text-ink-2', text: 'the test was wrong — fixed and re-run once, then passed' } : { tone: 'text-warn', text: `the test was wrong${hint}` };
     case 'app_bug': return { tone: 'text-critical', text: `the app is broken — every action passed and the check failed${r.cite ? ` · already ${r.cite}` : ''}` };
     case 'not_expressible': return { tone: 'text-warn', text: `cannot be tested this way${hint}` };
     case 'needs_a_person': return { tone: 'text-warn', text: `needs a person${hint}` };
@@ -98,7 +98,7 @@ const stopped = computed(() => {
       <span class="size-1.5 shrink-0 animate-pulse rounded-full bg-brand" aria-hidden="true" />
       <span class="min-w-0 truncate">{{ describe(current.step) }}</span>
     </p>
-    <p v-if="stopped" class="mt-1.5 font-mono text-[11.5px] leading-relaxed text-critical">
+    <p v-if="stopped" class="mt-1.5 font-mono text-[11.5px] leading-relaxed text-critical [overflow-wrap:anywhere]">
       stopped at {{ stopped.target }}: {{ stopped.error }}
     </p>
     <!-- A drafted check's verdict: the test was wrong, the app is broken, or a person is needed. -->

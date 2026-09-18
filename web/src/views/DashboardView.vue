@@ -37,8 +37,8 @@ const match = (rows) => rows.filter((r) => (r.suite ?? '').toLowerCase().include
     </HeroPanel>
 
     <EmptyState v-if="data && !data.totals.runs" title="No runs yet"
-                body="Onboard a suite and run it; the outcomes land here." >
-      <RouterLink to="/suites/new" class="rounded-full bg-brand hover:bg-brand-deep px-4 py-2 text-[13.5px] font-medium text-white">
+                body="Onboard a suite and run it; the outcomes land here.">
+      <RouterLink to="/suites/new" class="rounded-full bg-brand px-4 py-2 text-[13.5px] font-medium text-white hover:bg-brand-deep">
         Onboard a project
       </RouterLink>
     </EmptyState>
@@ -95,58 +95,62 @@ const match = (rows) => rows.filter((r) => (r.suite ?? '').toLowerCase().include
           <input v-model="filter" placeholder="Filter suites" aria-label="Filter suites"
                  class="ml-auto w-52 rounded-full border border-hairline bg-panel px-3.5 py-1 text-[12.5px] outline-none focus:border-ink/25">
         </div>
-        <table class="mt-3 w-full text-[13.5px]">
-          <thead class="border-y border-hairline text-left">
-            <tr class="table-head">
-              <th class="px-5 py-2.5 font-semibold">Suite</th>
-              <th class="px-3 py-2.5 font-semibold">Last run</th>
-              <th class="px-3 py-2.5 font-semibold">Pass rate</th>
-              <th class="px-5 py-2.5 text-right font-semibold">Status</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-hairline">
-            <tr v-for="s in match(data.suites)" :key="s.suite">
-              <td class="px-5 py-3">
-                <RouterLink v-if="s.suiteId" :to="`/suites/${s.suiteId}`" class="hover:underline">{{ s.suite }}</RouterLink>
-                <span v-else>{{ s.suite }}</span>
-              </td>
-              <td class="px-3 py-3 text-ink-2">{{ when(s.last.at) }}</td>
-              <td class="px-3 py-3 tabular-nums text-ink-2">{{ Math.round(s.passed / s.runs * 100) }}% of {{ s.runs }}</td>
-              <td class="px-5 py-3 text-right"><StatusPill :ok="s.last.ok" size="sm" /></td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="mt-3 overflow-x-auto">
+          <table class="w-full text-[13.5px]">
+            <thead class="border-y border-hairline text-left">
+              <tr class="table-head">
+                <th class="px-5 py-2.5 font-semibold">Suite</th>
+                <th class="px-3 py-2.5 font-semibold">Last run</th>
+                <th class="px-3 py-2.5 font-semibold">Pass rate</th>
+                <th class="px-5 py-2.5 text-right font-semibold">Status</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-hairline">
+              <tr v-for="s in match(data.suites)" :key="s.suite">
+                <td class="px-5 py-3">
+                  <RouterLink v-if="s.suiteId" :to="`/suites/${s.suiteId}`" class="hover:underline">{{ s.suite }}</RouterLink>
+                  <span v-else>{{ s.suite }}</span>
+                </td>
+                <td class="px-3 py-3 text-ink-2">{{ when(s.last.at) }}</td>
+                <td class="px-3 py-3 tabular-nums text-ink-2">{{ Math.round(s.passed / s.runs * 100) }}% of {{ s.runs }}</td>
+                <td class="px-5 py-3 text-right"><StatusPill :ok="s.last.ok" size="sm" /></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section class="card overflow-hidden">
         <div class="flex items-baseline gap-3 px-5 pt-5">
           <h2 class="text-[15px] font-medium">Latest</h2>
         </div>
-        <table class="mt-3 w-full text-[13.5px]">
-          <thead class="border-y border-hairline text-left">
-            <tr class="table-head">
-              <th class="px-5 py-2.5 font-semibold">Suite</th>
-              <th class="px-3 py-2.5 font-semibold">Steps</th>
-              <th class="px-3 py-2.5 font-semibold">Took</th>
-              <th class="px-5 py-2.5 text-right font-semibold">Status</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-hairline">
-            <tr v-for="r in match(data.latest)" :key="r.at">
-              <td class="px-5 py-3">
-                <p>{{ r.suite }}</p>
-                <p class="mt-0.5 text-[12px] text-ink-3">
-                  {{ when(r.at) }}<template v-if="r.error"> · {{ r.error }}</template>
-                </p>
-              </td>
-              <td class="px-3 py-3 tabular-nums text-ink-2">
-                {{ r.ok ? r.total : `${r.passed} of ${r.total}, stopped at ${r.step + 1}` }}
-              </td>
-              <td class="px-3 py-3 tabular-nums text-ink-2">{{ dur(r.ms) }}</td>
-              <td class="px-5 py-3 text-right"><StatusPill :ok="r.ok" size="sm" /></td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="mt-3 overflow-x-auto">
+          <table class="w-full text-[13.5px]">
+            <thead class="border-y border-hairline text-left">
+              <tr class="table-head">
+                <th class="px-5 py-2.5 font-semibold">Suite</th>
+                <th class="px-3 py-2.5 font-semibold">Steps</th>
+                <th class="px-3 py-2.5 font-semibold">Took</th>
+                <th class="px-5 py-2.5 text-right font-semibold">Status</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-hairline">
+              <tr v-for="r in match(data.latest)" :key="r.at">
+                <td class="px-5 py-3">
+                  <p>{{ r.suite }}</p>
+                  <p class="mt-0.5 text-[12px] text-ink-3">
+                    {{ when(r.at) }}<template v-if="r.error"> · {{ r.error }}</template>
+                  </p>
+                </td>
+                <td class="px-3 py-3 tabular-nums text-ink-2">
+                  {{ r.ok ? r.total : `${r.passed} of ${r.total}, stopped at ${r.step + 1}` }}
+                </td>
+                <td class="px-3 py-3 tabular-nums text-ink-2">{{ dur(r.ms) }}</td>
+                <td class="px-5 py-3 text-right"><StatusPill :ok="r.ok" size="sm" /></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </section>
     </template>
   </div>

@@ -134,10 +134,10 @@ async function remove(o) {
         <li v-for="o in live.origins" :key="o"
             class="flex items-center gap-2 rounded-full border border-hairline px-3 py-1.5 font-mono text-[12px]">
           {{ o }}
-          <button v-if="session.manages" class="text-ink-3 hover:text-critical" @click="remove(o)" :title="`Remove ${o}`">✕</button>
+          <button v-if="session.manages" class="text-ink-3 hover:text-critical" :title="`Remove ${o}`" @click="remove(o)">✕</button>
         </li>
       </ul>
-      <p v-if="state?.usage?.origins?.max !== null && state?.usage?.origins?.max !== undefined" class="mt-2 text-[12.5px] text-ink-3">
+      <p v-if="state?.usage?.origins?.max != null" class="mt-2 text-[12.5px] text-ink-3">
         {{ state.usage.origins.used }} of {{ state.usage.origins.max }} on the {{ state.plan }} plan.
       </p>
       <p v-if="!session.manages" class="mt-3 text-[12.5px] text-ink-3">Only an owner or admin of the organisation changes this list.</p>
@@ -145,7 +145,7 @@ async function remove(o) {
         <Field label="Allow another" class="flex-1">
           <input v-model="draft" placeholder="staging.acme.com" spellcheck="false" @keyup.enter="add">
         </Field>
-        <button class="mb-0.5 rounded-full bg-brand hover:bg-brand-deep px-4 py-2 text-[13px] font-medium text-white disabled:bg-ink/[0.05] disabled:text-ink-3"
+        <button class="mb-0.5 rounded-full bg-brand px-4 py-2 text-[13px] font-medium text-white hover:bg-brand-deep disabled:bg-ink/[0.05] disabled:text-ink-3"
                 :disabled="!draft" @click="add">Allow</button>
       </div>
     </section>

@@ -107,7 +107,9 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div v-if="shell" class="flex h-screen overflow-hidden">
+  <!-- dvh, not vh: the height a phone actually shows under its browser's
+       toolbar. The page itself never scrolls; main and the transcript do. -->
+  <div v-if="shell" class="flex h-dvh overflow-hidden">
     <SideNav />
     <main class="flex-1 overflow-y-auto">
       <RouterView />

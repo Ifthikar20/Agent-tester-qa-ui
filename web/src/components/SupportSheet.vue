@@ -67,7 +67,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 </script>
 
 <template>
-  <div class="fixed inset-0 z-30 grid place-items-center bg-ink/40 px-6" @click.self="ui.closeSupport()">
+  <!-- The scrim scrolls when the card is taller than the screen (a phone on
+       its side), so the button at the foot is always reachable. -->
+  <div class="fixed inset-0 z-30 grid place-items-center overflow-y-auto bg-ink/40 px-4 py-6 sm:px-6" @click.self="ui.closeSupport()">
     <div class="card w-full max-w-md p-6" role="dialog" aria-modal="true" aria-labelledby="support-title">
       <div class="flex items-start gap-3">
         <div class="min-w-0 flex-1">

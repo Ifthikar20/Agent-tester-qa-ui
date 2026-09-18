@@ -36,7 +36,7 @@ const SIZE = { sm: 'px-3 py-1.5 text-[12.5px]', md: 'px-4 py-2 text-[13px]' };
   <button
     type="button"
     :disabled="busy || disabled"
-    class="inline-flex items-center justify-center gap-2 rounded-full font-medium
+    class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-full font-medium
            transition-[transform,background-color,border-color,opacity] duration-75
            active:scale-[0.97] disabled:cursor-not-allowed disabled:active:scale-100
            disabled:border-hairline disabled:bg-ink/[0.05] disabled:text-ink-3"

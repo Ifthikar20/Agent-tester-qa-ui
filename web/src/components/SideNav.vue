@@ -86,7 +86,7 @@ onMounted(() => {
   // visited, so the sidebar asks for the one thing only it draws.
   live.loadOpenIncidents();
   // And the recent chats, which it draws on every page.
-  if (chat.available === null) chat.load({ quiet: true }).catch(() => {});
+  if (chat.available === null) chat.load({ quiet: true });
 });
 
 /**
@@ -142,12 +142,12 @@ const sectionOn = (x, s) => (x.query ? route.name === x.to && route.query.suite 
     <!-- The mark, doubling as the toggle. A product signs its own corner, and
          the corner is also the most findable place to put the control that put
          it there — no floating button, no second affordance to keep in sync. -->
-    <button type="button" @click="ui.toggleNav()"
+    <button type="button"
             :title="rail ? 'Expand the sidebar' : 'Collapse the sidebar'"
             :aria-label="rail ? 'Expand the sidebar' : 'Collapse the sidebar'"
             :aria-expanded="!rail"
             class="group flex items-center gap-2.5 py-4 hover:bg-ink/[0.03]"
-            :class="rail ? 'justify-center px-0' : 'px-4'">
+            :class="rail ? 'justify-center px-0' : 'px-4'" @click="ui.toggleNav()">
       <span class="grid size-7 shrink-0 place-items-center rounded-lg bg-ink">
         <span class="size-2 rounded-full bg-brand" />
       </span>
@@ -157,7 +157,6 @@ const sectionOn = (x, s) => (x.query ? route.name === x.to && route.query.suite 
         <path d="M9.5 4.5 6 8l3.5 3.5" />
       </svg>
     </button>
-
 
     <!-- Workspace: the organisation you act for (docs/AUTH.md §10) — every
          suite, origin and run below is hers — with its plan, and whether the
@@ -242,7 +241,7 @@ const sectionOn = (x, s) => (x.query ? route.name === x.to && route.query.suite 
       </template>
 
       <p v-if="!rail" class="eyebrow px-2 pb-2 pt-6">General</p>
-      <div v-else class="mx-2 mt-6 mb-2 border-t border-hairline" />
+      <div v-else class="mx-2 mb-2 mt-6 border-t border-hairline" />
       <RouterLink to="/dashboard" class="nav-item hover:bg-ink/[0.04] hover:text-ink" active-class="nav-item-on"
                   :class="rail && 'nav-item-rail'" :title="rail ? 'Run history' : null" :aria-label="rail ? 'Run history' : null">
         <Icon name="history" class="size-4 shrink-0" />
@@ -327,21 +326,23 @@ const sectionOn = (x, s) => (x.query ? route.name === x.to && route.query.suite 
       </div>
 
       <p v-if="!rail" class="eyebrow px-2 pb-2 pt-6">Admin</p>
-      <div v-else class="mx-2 mt-6 mb-2 border-t border-hairline" />
+      <div v-else class="mx-2 mb-2 mt-6 border-t border-hairline" />
       <RouterLink to="/settings" class="nav-item hover:bg-ink/[0.04] hover:text-ink" active-class="nav-item-on"
                   :class="rail && 'nav-item-rail'" :title="rail ? 'Origins &amp; vault' : null" :aria-label="rail ? 'Origins &amp; vault' : null">
         <Icon name="settings" class="size-4 shrink-0" />
         <span v-if="!rail">Origins &amp; vault</span>
       </RouterLink>
-      <RouterLink v-if="session.required" to="/organisation" class="nav-item hover:bg-ink/[0.04] hover:text-ink" active-class="nav-item-on">
+      <RouterLink v-if="session.required" to="/organisation" class="nav-item hover:bg-ink/[0.04] hover:text-ink" active-class="nav-item-on"
+                  :class="rail && 'nav-item-rail'" :title="rail ? 'Organisation' : null" :aria-label="rail ? 'Organisation' : null">
         <Icon name="org" class="size-4 shrink-0" />
-        Organisation
+        <span v-if="!rail">Organisation</span>
       </RouterLink>
       <!-- The account's own settings exist only when there is an account:
            with no control plane there is no password to change. -->
-      <RouterLink v-if="session.required" to="/security" class="nav-item hover:bg-ink/[0.04] hover:text-ink" active-class="nav-item-on">
+      <RouterLink v-if="session.required" to="/security" class="nav-item hover:bg-ink/[0.04] hover:text-ink" active-class="nav-item-on"
+                  :class="rail && 'nav-item-rail'" :title="rail ? 'Security' : null" :aria-label="rail ? 'Security' : null">
         <Icon name="security" class="size-4 shrink-0" />
-        Security
+        <span v-if="!rail">Security</span>
       </RouterLink>
     </nav>
 
@@ -364,8 +365,8 @@ const sectionOn = (x, s) => (x.query ? route.name === x.to && route.query.suite 
       <!-- A row of its own, in words, not a grey link inside the card: it is
            the one thing here you press on the way out. In the rail the words
            go and the icon stays — signing out must never become unreachable. -->
-      <button type="button" @click="signOut" title="Sign out" aria-label="Sign out"
-              class="nav-item mt-1 w-full hover:bg-ink/[0.04] hover:text-ink" :class="rail && 'nav-item-rail'">
+      <button type="button" title="Sign out" aria-label="Sign out"
+              class="nav-item mt-1 w-full hover:bg-ink/[0.04] hover:text-ink" :class="rail && 'nav-item-rail'" @click="signOut">
         <svg viewBox="0 0 16 16" class="size-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5"
              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M6 13.5H3.5v-11H6M10 11l3-3-3-3M13 8H6.5" />

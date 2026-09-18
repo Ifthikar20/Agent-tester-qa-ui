@@ -1138,7 +1138,9 @@ the shell has two nav affordances that must agree with each other. The wordmark
 in the corner is the toggle, which is also the most findable place to put it.
 The width is the only thing that changes: `App.vue` is plain flexbox with a
 `flex-1` main, so nothing has to be kept in sync. Remembered per viewer under
-`gc.nav.collapsed`, the same shape as `gc.pace`.
+`gc.nav.collapsed`, the same shape as `gc.pace`. On a screen narrower than 768px
+it starts as the rail — 248px would be two thirds of a phone — and a stored
+choice wins over that default either way (`stores/ui.js`).
 
 The rail costs one thing, and it is worth naming: the visible label *is* the
 accessible name in the expanded nav, which is why the icons are `aria-hidden`.

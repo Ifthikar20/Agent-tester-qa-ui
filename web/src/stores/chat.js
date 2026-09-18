@@ -85,6 +85,7 @@ export const useChatStore = defineStore('chat', {
   },
 
   actions: {
+    // ------------------------------------------------------------ reading
     /**
      * What the runner offers, and its conversations. Quiet (no `loading`)
      * after the first time: a re-read behind a transcript is not a page load.
@@ -131,7 +132,8 @@ export const useChatStore = defineStore('chat', {
         // Gone — deleted from another tab, or a runner that no longer has it.
         if (e.status === 404) {
           this.conversations = this.conversations.filter((c) => c.id !== id);
-          if (this.current?.id === id) this.current = null;
+          if (this.current?.id === id) { this.current = null; remember(null); }
+          return;
         }
         this.error = e.message;
       }
@@ -151,6 +153,7 @@ export const useChatStore = defineStore('chat', {
       if (id && this.conversations.some((c) => c.id === id)) await this.open(id);
     },
 
+    // ------------------------------------------------------------- asking
     /**
      * Ask. Accepted with a 202 and answered on the socket: the person's
      * bubble goes up at once and the reply builds in `turn` as events land.
@@ -239,6 +242,7 @@ export const useChatStore = defineStore('chat', {
       catch (e) { this.error = e.message; return false; }
     },
 
+    // --------------------------------------------------------- forgetting
     /** Delete a conversation. A reply in flight for it has nowhere to go, so it goes too. */
     async remove(id) {
       this.error = null;
@@ -250,6 +254,7 @@ export const useChatStore = defineStore('chat', {
       return true;
     },
 
+    // --------------------------------------------------------- the socket
     /**
      * The socket is (back) up. A reply that landed while it was down is on the
      * runner and not here: the list again, and the open conversation whole.

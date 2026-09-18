@@ -286,7 +286,9 @@ watch(() => live.recordedFlow, (f) => {
 
   <div class="grid gap-5 px-6 py-6 xl:grid-cols-[minmax(0,1fr)_380px]">
     <!-- stage -------------------------------------------------------- -->
-    <div>
+    <!-- min-w-0: a grid item is otherwise as wide as its widest line, and the
+         address bar's one-line URL would push the whole column past a phone. -->
+    <div class="min-w-0">
       <!-- The chrome the canvas does not have. A video of a browser shows you
            the page and nothing about where it is; this is the address bar. -->
       <AddressBar :url="live.url" :nav="live.currentNav" />
@@ -300,7 +302,7 @@ watch(() => live.recordedFlow, (f) => {
              :title="homeUrl ? `Reopen ${homeUrl}` : 'Nothing has been opened from here yet'" @click="goHome">Home</Btn>
         <input v-model="urlBox" spellcheck="false" aria-label="URL to open"
                placeholder="staging.acme.com/dashboard"
-               class="min-w-0 flex-1 rounded-full border border-hairline bg-panel px-4 py-2 text-[13.5px] outline-none focus:border-ink/25"
+               class="min-w-0 grow basis-40 rounded-full border border-hairline bg-panel px-4 py-2 text-[13.5px] outline-none focus:border-ink/25"
                @keyup.enter="open">
         <Btn :busy="!!opening" busy-label="Opening…" @click="open">Open</Btn>
         <Btn variant="ghost" @click="live.send({ t: 'inspect' })">Re-scan</Btn>
