@@ -19,6 +19,7 @@ import { useLive } from '@/stores/live';
 import { useSession } from '@/stores/session';
 import { useUi } from '@/stores/ui';
 import { useChatStore } from '@/stores/chat';
+import { when } from '@/time';
 import SiteIcon from '@/components/SiteIcon.vue';
 // The nav's glyphs are named rather than drawn here: src/icons resolves each
 // name to the designer's PNG if one has been dropped in and to line art if not,
@@ -84,7 +85,41 @@ onMounted(() => {
   // The open-incident dot has to be right before the monitoring page has been
   // visited, so the sidebar asks for the one thing only it draws.
   live.loadOpenIncidents();
+  // And the recent chats, which it draws on every page.
+  if (chat.available === null) chat.load({ quiet: true }).catch(() => {});
 });
+
+/**
+ * The recent chats under Chat: newest first, the search over title and last
+ * words once there are enough to need one, eight until asked for all. A
+ * conversation is about whatever you are looking at, so the list is here on
+ * every page rather than on the chat page alone.
+ */
+const CHATS_SHOWN = 8;
+const chatQuery = ref('');
+const showAllChats = ref(false);
+const chatRows = computed(() => {
+  const q = chatQuery.value.trim().toLowerCase();
+  const rows = [...chat.conversations].sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+  return q ? rows.filter((c) => `${c.title ?? ''}\n${c.last?.text ?? ''}`.toLowerCase().includes(q)) : rows;
+});
+const chatsShown = computed(() => (showAllChats.value || chatQuery.value ? chatRows.value : chatRows.value.slice(0, CHATS_SHOWN)));
+const chatsMore = computed(() => !chatQuery.value && chatRows.value.length > CHATS_SHOWN);
+const onChatPage = computed(() => route.name === 'chat');
+function openChat(id) {
+  chat.open(id);
+  if (!onChatPage.value) router.push('/chat');
+}
+function newChat() {
+  chat.fresh();
+  if (!onChatPage.value) router.push('/chat');
+}
+async function removeChat(id) {
+  const c = chat.conversations.find((x) => x.id === id);
+  if (!c) return;
+  if (!confirm(`Delete "${c.title}"? The runner forgets it too.`)) return;
+  await chat.remove(id);
+}
 
 const SECTIONS = [
   { to: 'suite',       label: 'Overview' },
@@ -271,6 +306,47 @@ const sectionOn = (x, s) => (x.query ? route.name === x.to && route.query.suite 
         <span v-if="chat.turn || chat.busy" :class="rail ? 'absolute right-1 top-1 size-1.5' : 'ml-auto size-1.5'"
               class="animate-pulse rounded-full bg-brand" title="a reply is being written" />
       </RouterLink>
+      <!-- The conversations, hung off Chat the way a suite's sections hang off
+           the suite: a fold, a new one, a search once there are enough to need
+           one, and the recent ones by title with the open one lit. -->
+      <div v-if="!rail" class="mb-1.5 ml-[1.05rem] mt-0.5 border-l border-hairline pl-[7px]" data-chats>
+        <button type="button" :aria-expanded="ui.chatsOpen"
+                class="flex w-full items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.07em] text-ink-3 hover:bg-ink/[0.04] hover:text-ink"
+                @click="ui.toggleChats()">
+          <svg viewBox="0 0 16 16" class="size-3 shrink-0 transition-transform" :class="ui.chatsOpen && 'rotate-90'" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4l4 4-4 4" /></svg>
+          Recent chats
+          <span v-if="chat.conversations.length" class="ml-auto font-normal normal-case tracking-normal tabular-nums">{{ chat.conversations.length }}</span>
+        </button>
+        <template v-if="ui.chatsOpen">
+          <button type="button" class="flex w-full items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12.5px] leading-5 hover:bg-ink/[0.04] hover:text-ink"
+                  :class="onChatPage && !chat.current ? 'font-medium text-brand-2' : 'text-ink-2'" @click="newChat">
+            <span class="text-[14px] leading-none" aria-hidden="true">+</span> New chat
+          </button>
+          <input v-if="chat.conversations.length > 4" v-model="chatQuery" type="search" aria-label="Search chats" placeholder="Search chats"
+                 class="mb-1 mt-0.5 w-full rounded-md border border-hairline bg-ground px-2 py-1 text-[12px] text-ink outline-none placeholder:text-ink-3 focus:border-ink/25">
+          <p v-if="!chat.conversations.length" class="px-2.5 py-1 text-[12px] text-ink-3">Nothing asked yet.</p>
+          <p v-else-if="!chatsShown.length" class="px-2.5 py-1 text-[12px] text-ink-3">Nothing matches.</p>
+          <div v-for="c in chatsShown" :key="c.id" class="group relative">
+            <button type="button" :title="c.title"
+                    class="relative block w-full rounded-md py-1.5 pl-2.5 pr-7 text-left text-[12.5px] leading-5
+                           before:absolute before:bottom-1.5 before:top-1.5 before:w-0.5 before:rounded-full before:left-[-8.3px] before:content-['']"
+                    :class="onChatPage && chat.current?.id === c.id
+                      ? 'font-medium text-brand-2 before:bg-brand'
+                      : 'text-ink-3 before:bg-transparent hover:bg-ink/[0.04] hover:text-ink'"
+                    @click="openChat(c.id)">
+              <span class="block truncate">{{ c.title }}</span>
+              <span class="block truncate text-[11px] font-normal text-ink-3">{{ when(c.updatedAt) }}<template v-if="c.proposal"> · waiting for a yes</template></span>
+            </button>
+            <button type="button" :aria-label="`Delete ${c.title}`" title="Delete — the runner forgets it too"
+                    class="absolute right-1 top-1.5 grid size-5 place-items-center rounded text-ink-3 opacity-0 hover:bg-critical/5 hover:text-critical focus-visible:opacity-100 group-hover:opacity-100"
+                    @click.stop="removeChat(c.id)">
+              <svg viewBox="0 0 16 16" class="size-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+            </button>
+          </div>
+          <button v-if="chatsMore" type="button" class="w-full rounded-md px-2.5 py-1 text-left text-[12px] text-ink-3 hover:bg-ink/[0.04] hover:text-ink"
+                  @click="showAllChats = !showAllChats">{{ showAllChats ? 'Show fewer' : `Show all ${chat.conversations.length}` }}</button>
+        </template>
+      </div>
 
       <p v-if="!rail" class="eyebrow px-2 pb-2 pt-6">Admin</p>
       <div v-else class="mx-2 mt-6 mb-2 border-t border-hairline" />

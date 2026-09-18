@@ -34,7 +34,7 @@ const EARLY_MAX = 200;
 const FINISHED_MAX = 20;
 
 /** The reply being written for a turn, before any of it has arrived. */
-const blank = (id, conversationId) => ({ id, conversationId, text: '', tools: [], proposal: null, running: false });
+const blank = (id, conversationId) => ({ id, conversationId, text: '', tools: [], proposal: null, running: false, startedAt: Date.now() });
 
 /**
  * Which conversation this viewer had open, remembered in the browser the way
@@ -289,9 +289,11 @@ export const useChatStore = defineStore('chat', {
         case 'chat.tool': {
           const c = ev.call;
           if (!mine || !c?.id) break;
-          const call = { id: c.id, name: c.name, label: c.label ?? c.name, state: c.state, summary: c.summary ?? null };
-          // The same id twice — start, then done or error — and the latest wins.
+          // The same id twice — start, then done or error — and the latest wins;
+          // when it started and when it ended stay with it, for the working view.
           const i = this.turn.tools.findIndex((x) => x.id === c.id);
+          const at = i < 0 ? Date.now() : this.turn.tools[i].at;
+          const call = { id: c.id, name: c.name, label: c.label ?? c.name, state: c.state, summary: c.summary ?? null, at, doneAt: c.state === 'start' ? null : Date.now() };
           if (i < 0) this.turn.tools.push(call); else this.turn.tools.splice(i, 1, call);
           // A run tool that started is a run to show live; one refused before
           // it ran is not, and whatever run the runner last did is not this one.

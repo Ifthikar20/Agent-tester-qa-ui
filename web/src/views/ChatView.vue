@@ -11,8 +11,9 @@
  * Two shapes of one page. Before anything is asked: the question, centred,
  * with six things worth asking under it. After: the transcript, owning its
  * own scroll, with the composer docked at the foot and a button back to the
- * end once you have scrolled up to read. Past conversations are a panel from
- * the top bar (ChatHistory), not a second sidebar.
+ * end once you have scrolled up to read. Past conversations live in the app's
+ * sidebar under Chat (SideNav), on every page. While a reply is being made,
+ * the agents at work on it are drawn step by step (ChatActivity).
  *
  * Nothing a reply says runs anything by itself. A scan, a quickstart or a
  * batch of drafted checks is a PROPOSAL, and the buttons under it are the
@@ -34,7 +35,8 @@ import Icon from '@/components/Icon.vue';
 import ChatText from '@/components/ChatText.vue';
 import ChatData from '@/components/ChatData.vue';
 import ChatComposer from '@/components/ChatComposer.vue';
-import ChatHistory from '@/components/ChatHistory.vue';
+import ChatActivity from '@/components/ChatActivity.vue';
+import { agentOf } from '@/agents';
 import ChatRunCard from '@/components/ChatRunCard.vue';
 import ChatDraftList from '@/components/ChatDraftList.vue';
 
@@ -61,9 +63,6 @@ onMounted(async () => {
     firstPage.value = s ? ((await api.suite(s.id)).suite?.pages?.[0]?.name ?? null) : null;
   } catch { firstPage.value = null; }
 });
-
-/** The history's rows, newest first — the runner lists them so, and a local row keeps it so. */
-const rows = computed(() => [...chat.conversations].sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)));
 
 /** Which mind answers, for the chip in the top bar: the model by name, or the rules. */
 const mode = computed(() => {
@@ -125,27 +124,10 @@ const crumbs = computed(() => [{ label: 'General' }, { label: 'Chat' }, ...(chat
 const placeholder = computed(() => (canSend.value ? 'Ask about defects, runs, suites — or name a page to test'
   : live.connected ? 'Chat is not available on this runner' : 'Runner offline'));
 
-// ---------------------------------------------------------------- history
-const historyOpen = ref(false);
-const historyBtn = ref(null);
-function closeHistory() {
-  historyOpen.value = false;
-  nextTick(() => historyBtn.value?.focus());
-}
-function openConversation(id) {
-  chat.open(id);
-  closeHistory();
-}
+// ---------------------------------------------------------------- a new one
 function startFresh() {
   chat.fresh();
-  historyOpen.value = false;
   nextTick(() => composer.value?.focus());
-}
-async function removeOne(id) {
-  const c = chat.conversations.find((x) => x.id === id);
-  if (!c) return;
-  if (!confirm(`Delete "${c.title}"? The runner forgets it too.`)) return;
-  await chat.remove(id);
 }
 
 // ---------------------------------------------------------------- asking
@@ -251,13 +233,8 @@ onBeforeUnmount(() => { ro?.disconnect(); clearTimeout(settleTimer); });
           {{ mode.label }}
           <span v-if="mode.claude && chat.budget" class="font-normal text-ink-3">{{ chat.budget.used }}/{{ chat.budget.max }}</span>
         </span>
-        <button ref="historyBtn" type="button" aria-haspopup="dialog" :aria-expanded="historyOpen"
-                class="rounded-full border border-hairline px-3.5 py-1.5 text-[12.5px] text-ink-2 hover:border-ink/25 hover:text-ink"
-                title="Conversations kept on the runner" @click="historyOpen = true">
-          History<span v-if="rows.length" class="ml-1 text-ink-3">{{ rows.length }}</span>
-        </button>
         <Btn variant="ghost" size="sm" :disabled="!chat.current"
-             title="Start another conversation; this one stays in History" @click="startFresh">+ New chat</Btn>
+             title="Start another conversation; this one stays under Recent chats in the sidebar" @click="startFresh">+ New chat</Btn>
       </template>
     </TopBar>
 
@@ -335,10 +312,15 @@ onBeforeUnmount(() => { ro?.disconnect(); clearTimeout(settleTimer); });
               <!-- What the tools read, drawn: tiles, the runs chart, tables (chat.js data, ChatData). -->
               <ChatData v-for="(d, i) in m.data ?? []" :key="`${m.id}-d${i}`" :view="d" class="mt-3 w-full" />
 
-              <ul v-if="m.role === 'assistant' && m.tools?.length" class="mt-2 space-y-0.5 pl-1 font-mono text-[11.5px]">
+              <!-- The agents that answered, one badge each (agents.js), with what they did. -->
+              <ul v-if="m.role === 'assistant' && m.tools?.length" class="mt-2 flex flex-wrap gap-1.5">
                 <li v-for="c in m.tools" :key="c.id"
-                    :class="c.refused ? 'text-warn' : c.ok === false ? 'text-critical' : 'text-ink-3'">
-                  · {{ c.label }}<template v-if="c.summary"> — {{ c.summary }}</template>
+                    class="inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11.5px]"
+                    :class="c.refused ? 'border-warn/40 text-warn' : c.ok === false ? 'border-critical/40 text-critical' : 'border-hairline text-ink-2'"
+                    :title="`${agentOf(c.name).name} · ${c.label}${c.summary ? ` — ${c.summary}` : ''}`">
+                  <Icon :name="agentOf(c.name).icon" class="size-3 shrink-0 text-ink-3" />
+                  <span class="shrink-0 font-medium">{{ agentOf(c.name).name }}</span>
+                  <span class="truncate">{{ c.label }}<template v-if="c.summary"> — {{ c.summary }}</template></span>
                 </li>
               </ul>
               <!-- Where a reply was read from: the documentation sections it cited (chat.js sources). -->
@@ -381,19 +363,8 @@ onBeforeUnmount(() => { ro?.disconnect(); clearTimeout(settleTimer); });
             <!-- The reply being written: its words as they stream, or a thought;
                  its tool calls as they start and land; the run, live. -->
             <li v-if="chat.writing" class="flex flex-col items-start" data-message="writing">
-              <ChatText v-if="chat.turn.text" :text="chat.turn.text" caret class="w-full" />
-              <p v-else class="text-[13.5px] text-ink-3">Thinking…</p>
-              <ul v-if="chat.turn.tools.length" class="mt-2 space-y-0.5 pl-1 font-mono text-[11.5px]">
-                <li v-for="c in chat.turn.tools" :key="c.id" class="flex items-center gap-1.5"
-                    :class="c.state === 'error' ? 'text-critical' : 'text-ink-3'">
-                  <svg v-if="c.state === 'start'" class="size-3 shrink-0 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" opacity=".25" />
-                    <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
-                  </svg>
-                  <span v-else aria-hidden="true">·</span>
-                  <span>{{ c.label }}<template v-if="c.summary"> — {{ c.summary }}</template></span>
-                </li>
-              </ul>
+              <ChatActivity :turn="chat.turn" class="w-full" />
+              <ChatText v-if="chat.turn.text" :text="chat.turn.text" caret class="mt-3 w-full" />
               <div v-if="liveRun" class="mt-3 w-full">
                 <ChatRunCard :live="liveRun" />
                 <p v-if="live.suiteRun" class="mt-1 text-[11.5px] text-ink-3">
@@ -428,7 +399,5 @@ onBeforeUnmount(() => { ro?.disconnect(); clearTimeout(settleTimer); });
       </div>
     </div>
 
-    <ChatHistory v-if="historyOpen" :rows="rows" :current-id="chat.current?.id ?? null"
-                 @open="openConversation" @fresh="startFresh" @remove="removeOne" @close="closeHistory" />
   </div>
 </template>

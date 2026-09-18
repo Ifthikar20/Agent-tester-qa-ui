@@ -14,6 +14,7 @@ import { defineStore } from 'pinia';
 import { DARK_QUERY, THEME_KEY, parseChoice, resolve } from '@/theme';
 
 const KEY = 'gc.nav.collapsed';
+const CHATS_KEY = 'gc.nav.chats';
 
 export const useUi = defineStore('ui', {
   state: () => ({
@@ -31,6 +32,10 @@ export const useUi = defineStore('ui', {
     systemDark: (() => {
       try { return window.matchMedia(DARK_QUERY).matches; } catch { return false; }
     })(),
+    /** The recent chats under Chat in the sidebar, open unless this viewer folded them. */
+    chatsOpen: (() => {
+      try { return localStorage.getItem(CHATS_KEY) !== '0'; } catch { return true; }
+    })(),
     /** The help panel and the support sheet, opened from any page's top bar. */
     helpOpen: false,
     supportOpen: false,
@@ -45,6 +50,11 @@ export const useUi = defineStore('ui', {
     toggleNav() {
       this.navCollapsed = !this.navCollapsed;
       try { localStorage.setItem(KEY, this.navCollapsed ? '1' : '0'); } catch { /* private window */ }
+    },
+
+    toggleChats() {
+      this.chatsOpen = !this.chatsOpen;
+      try { localStorage.setItem(CHATS_KEY, this.chatsOpen ? '1' : '0'); } catch { /* private window */ }
     },
 
     setTheme(choice) {
