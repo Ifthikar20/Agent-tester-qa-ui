@@ -338,6 +338,18 @@ onBeforeUnmount(() => { ro?.disconnect(); clearTimeout(settleTimer); });
                   · {{ c.label }}<template v-if="c.summary"> — {{ c.summary }}</template>
                 </li>
               </ul>
+              <!-- Where a reply was read from: the documentation sections it cited (chat.js sources). -->
+              <div v-if="m.sources?.length" class="mt-2 flex flex-wrap gap-1.5">
+                <span v-for="s in m.sources" :key="`${s.file}#${s.heading}`"
+                      class="inline-flex max-w-full items-center gap-1.5 rounded-full border border-hairline bg-panel px-2.5 py-0.5 text-[11.5px] text-ink-2"
+                      :title="`Read from ${s.file}, under “${s.heading}”`">
+                  <svg viewBox="0 0 16 16" class="size-3 shrink-0 text-ink-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M3.5 2.5h6l3 3v8h-9zM9.5 2.5v3h3M5.5 8h5M5.5 10.5h5" />
+                  </svg>
+                  <span class="truncate">{{ s.heading }}</span>
+                  <span class="shrink-0 text-ink-3">{{ s.file }}</span>
+                </span>
+              </div>
               <div v-if="m.runs?.length" class="mt-3 w-full space-y-2">
                 <ChatRunCard v-for="(r, i) in m.runs" :key="`${m.id}-${i}`" :run="r"
                              :saved="saved.has(keyOf(r))" :saving="saving === keyOf(r)" @save="keep(r)" />
