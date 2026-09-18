@@ -8,7 +8,8 @@
  * ink: an answer, the runner's own muted note, or a dead turn in red; the box
  * around a note or an error is the caller's class, which lands on the root.
  * `caret` is the blinking cursor a streaming reply carries (ChatView), placed
- * inside the last block so it sits after the last word.
+ * inside the last block so it sits after the last word. A pipe table is drawn
+ * as one; a quoted README section is full of them.
  */
 import { computed, h } from 'vue';
 import { parse } from '@/markdown';
@@ -44,6 +45,10 @@ export default {
           case 'h': return h('p', { class: b.level === 1 ? 'text-[15px] font-semibold' : 'font-semibold' }, [...inline(b.runs), ...tail]);
           case 'ul': return h('ul', { class: 'list-disc space-y-1 pl-5 marker:text-ink-3' }, items(b.items, tail));
           case 'ol': return h('ol', { class: 'list-decimal space-y-1 pl-5 tabular-nums marker:text-ink-3', start: b.start }, items(b.items, tail));
+          case 'table': return h('div', { class: 'overflow-x-auto' }, h('table', { class: 'w-full text-left text-[12.5px]' }, [
+            h('thead', { class: 'table-head' }, h('tr', null, b.head.map((c) => h('th', { class: 'px-2 py-1 font-medium' }, inline(c))))),
+            h('tbody', null, b.rows.map((r) => h('tr', { class: 'border-t border-hairline' }, r.map((c) => h('td', { class: 'px-2 py-1 align-top' }, inline(c)))))),
+          ]));
           case 'code': return h('pre', { class: 'overflow-x-auto rounded-lg border border-hairline bg-panel px-3 py-2 font-mono text-[12px] leading-relaxed' }, [h('code', null, b.text), ...tail]);
           default: return h('p', { class: 'whitespace-pre-wrap' }, [...lined(b.lines), ...tail]);
         }

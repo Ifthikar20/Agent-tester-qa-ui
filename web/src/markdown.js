@@ -21,6 +21,10 @@
 const FENCE = /^\s*```/;
 const HEADING = /^(#{1,3})\s+(.+?)\s*#*$/;
 const BULLET = /^\s*[-*•·]\s+(.+)$/;
+const TABLE_ROW = /^\s*\|.*\|\s*$/;
+const TABLE_SEP = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/;
+/** One row of a pipe table: its cells, each as inline runs. */
+const cells = (line) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => runs(c.trim()));
 const NUMBERED = /^\s*(\d{1,3})[.)]\s+(.+)$/;
 
 /**
@@ -61,7 +65,8 @@ export function parse(text) {
   const blocks = [];
   let cur = null;      // the block the next line may continue
   let fence = null;    // the lines of an open code fence
-  for (const raw of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
     if (fence) {
       if (FENCE.test(raw)) { blocks.push({ type: 'code', text: fence.join('\n') }); fence = null; }
       else fence.push(raw);
@@ -72,6 +77,11 @@ export function parse(text) {
     if (!line.trim()) { cur = null; continue; }
     let m;
     if ((m = HEADING.exec(line))) { cur = null; blocks.push({ type: 'h', level: m[1].length, runs: runs(m[2]) }); continue; }
+    // A pipe table: a header row over a separator row, then rows until a line that is not one.
+    if (TABLE_ROW.test(line)) {
+      if (cur?.type === 'table') { cur.rows.push(cells(line)); continue; }
+      if (TABLE_SEP.test(lines[i + 1] ?? '')) { cur = { type: 'table', head: cells(line), rows: [] }; blocks.push(cur); i++; continue; }
+    }
     if ((m = BULLET.exec(line))) {
       if (cur?.type !== 'ul') { cur = { type: 'ul', items: [] }; blocks.push(cur); }
       cur.items.push(runs(m[1]));

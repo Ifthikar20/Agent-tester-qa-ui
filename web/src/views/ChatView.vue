@@ -32,6 +32,7 @@ import RunnerBusy from '@/components/RunnerBusy.vue';
 import Btn from '@/components/Btn.vue';
 import Icon from '@/components/Icon.vue';
 import ChatText from '@/components/ChatText.vue';
+import ChatData from '@/components/ChatData.vue';
 import ChatComposer from '@/components/ChatComposer.vue';
 import ChatHistory from '@/components/ChatHistory.vue';
 import ChatRunCard from '@/components/ChatRunCard.vue';
@@ -331,6 +332,8 @@ onBeforeUnmount(() => { ro?.disconnect(); clearTimeout(settleTimer); });
                         :tone="m.error ? 'error' : m.mind === 'runner' ? 'note' : 'answer'"
                         :class="m.error ? 'rounded-xl border border-critical/25 bg-critical/5 px-4 py-3'
                               : m.mind === 'runner' ? 'rounded-xl border border-dashed border-hairline bg-ground px-4 py-3' : ''" />
+              <!-- What the tools read, drawn: tiles, the runs chart, tables (chat.js data, ChatData). -->
+              <ChatData v-for="(d, i) in m.data ?? []" :key="`${m.id}-d${i}`" :view="d" class="mt-3 w-full" />
 
               <ul v-if="m.role === 'assistant' && m.tools?.length" class="mt-2 space-y-0.5 pl-1 font-mono text-[11.5px]">
                 <li v-for="c in m.tools" :key="c.id"
