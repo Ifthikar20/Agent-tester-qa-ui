@@ -181,33 +181,27 @@ const sectionOn = (x, s) => (x.query ? route.name === x.to && route.query.suite 
          died should not need a run to discover, and one another organisation
          is driving should say so here, not on the canvas.
 
-         Collapsed to the rail there is nowhere to write any of that, so the
-         name, the plan and the switcher go and the runner state becomes a dot
-         on the avatar. Dropping it entirely would hide the one thing this
-         block exists to surface, so the title carries the words for a pointer. -->
-    <div class="mb-5 rounded-xl border border-hairline bg-ground"
-         :class="rail ? 'mx-2 p-2' : 'mx-3 px-3 py-2.5'">
-      <div class="flex items-center gap-2.5" :class="rail && 'justify-center'">
-        <span class="relative grid size-7 shrink-0 place-items-center rounded-lg bg-panel text-[12px] font-semibold
-                     text-ink-2 ring-1 ring-hairline"
-              :title="rail ? `${session.org?.name ?? 'Local workspace'} — ${runnerState}` : session.org?.slug">{{ initial }}<span
-              v-if="rail" class="absolute -bottom-0.5 -right-0.5 size-2 rounded-full ring-2 ring-ground"
-              :class="runnerDot" /></span>
+         A quiet row, not a card: the mark carries the runner's state as a dot
+         in both widths; expanded, the name, the plan and the state in words
+         sit beside it, and the switcher below when there is anything to
+         switch to. In the rail the title carries the words for a pointer. -->
+    <div class="mb-4" :class="rail ? 'mx-2' : 'mx-3'">
+      <div class="flex items-center gap-2.5 py-1" :class="rail ? 'justify-center' : 'px-2'">
+        <span class="relative grid size-7 shrink-0 place-items-center rounded-lg bg-ink/[0.05] text-[12px] font-semibold text-ink-2"
+              :title="rail ? `${session.org?.name ?? 'Local workspace'} — ${runnerState}` : runnerState">{{ initial }}<span
+              class="absolute -bottom-0.5 -right-0.5 size-2 rounded-full ring-2 ring-panel" :class="runnerDot" /></span>
         <span v-if="!rail" class="min-w-0 flex-1">
-          <span class="flex items-center gap-1.5">
+          <span class="flex items-baseline gap-1.5">
             <span class="block truncate text-[13px] font-medium text-ink" :title="session.org?.slug">{{ session.org?.name ?? 'Local workspace' }}</span>
-            <span v-if="session.org?.plan" class="shrink-0 rounded-full bg-brand-50 px-1.5 py-px text-[10.5px] font-medium text-brand-2">{{ session.org.plan }}</span>
+            <span v-if="session.org?.plan" class="shrink-0 text-[10.5px] uppercase tracking-[0.06em] text-ink-3">{{ session.org.plan }}</span>
           </span>
-          <span class="mt-0.5 flex items-center gap-1.5 text-[11.5px] text-ink-3">
-            <span class="size-1.5 rounded-full" :class="runnerDot" />
-            {{ runnerState }}
-          </span>
+          <span class="block truncate text-[11.5px] text-ink-3">{{ runnerState }}</span>
         </span>
       </div>
       <!-- A switcher only when there is something to switch to. -->
       <select v-if="!rail && session.orgs.length > 1" :value="session.org?.slug" :disabled="switching"
               aria-label="Act for another organisation"
-              class="mt-2 w-full rounded-lg border border-hairline bg-panel px-2 py-1 text-[12px] text-ink-2 outline-none focus:border-ink/25"
+              class="mt-1 w-full rounded-lg border border-hairline bg-ground px-2 py-1 text-[12px] text-ink-2 outline-none focus:border-ink/25"
               @change="switchOrg($event.target.value)">
         <option v-for="o in session.orgs" :key="o.slug" :value="o.slug">{{ o.name }} · {{ o.role }}</option>
       </select>
