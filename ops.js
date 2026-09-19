@@ -530,6 +530,61 @@ export const OPS = {
     await settle(page, step.settle);      // type-ahead, validation, a live filter
   },
 
+  /** A checkbox, a switch or a radio, put in the asked-for state: see setChecked. */
+  async tick(page, step, ctx) { await setChecked(page, step, ctx, true); },
+  async untick(page, step, ctx) { await setChecked(page, step, ctx, false); },
+
+  /**
+   * An option in a dropdown, by the words on it.
+   *
+   * A native <select> is set through the browser, after the words are matched
+   * here — Playwright's own matcher waits its whole timeout to say "no such
+   * option", and the list of what IS there is the useful sentence. A combobox
+   * of the page's own has no options until it is open, so it is opened the
+   * way a person opens it and the option is pressed by name.
+   */
+  async choose(page, step, ctx) {
+    await pointAt(page, step.target, ctx, { at: step.at, timeout: step.timeout });
+    const value = step.valueRef ? (ctx.vault ?? vaultOf(LOCAL)).get(step.valueRef) : step.value;
+    if (value === undefined) throw new Error(`No value for ${step.target}`);
+    const box = el(page, step.target, ctx);
+    const perf = performanceAt(ctx.pace ?? PACE);
+    const native = await box.evaluate((n) => n.tagName === 'SELECT').catch(() => false);
+    if (native) {
+      const options = await box.evaluate((n) => [...n.options].map((o) => ({ label: (o.label || o.textContent || '').trim(), value: o.value })));
+      const want = String(value);
+      const hit = options.find((o) => o.label === want)
+        ?? options.find((o) => o.label.toLowerCase() === want.toLowerCase())
+        ?? options.find((o) => o.value === want);
+      if (!hit) {
+        throw new Error(`"${want}" is not an option of ${step.target} — it offers ${options.slice(0, 12).map((o) => `"${o.label}"`).join(', ') || 'nothing'}`);
+      }
+      await box.selectOption({ value: hit.value }, { timeout: step.timeout ?? TIMEOUT });
+    } else {
+      await ctx.cursor.click(perf.press);
+      await settle(page, step.settle);
+      await pointAt(page, `option:${value}`, ctx, { timeout: step.timeout });
+      await ctx.cursor.click(perf.press);
+    }
+    await settle(page, step.settle);
+    ctx.emit?.({ t: 'log', level: 'info', msg: `chose "${value}" in ${step.target}` });
+  },
+
+  /**
+   * A key, on a named control or wherever the focus is. Focus is taken the
+   * way a person takes it — a click at the field's edge — and Enter may
+   * submit, so the navigation mark is set as a click sets it.
+   */
+  async press(page, step, ctx) {
+    if (step.target) {
+      await pointAt(page, step.target, ctx, { leftEdge: true, at: step.at, timeout: step.timeout });
+      await ctx.cursor.click(performanceAt(ctx.pace ?? PACE).press);
+    }
+    markNav(ctx);
+    await page.keyboard.press(step.key);
+    await settle(page, step.settle);
+  },
+
   async expect(page, step, ctx) {
     if (step.assert === 'urlContains') {
       // Poll the URL rather than waitForURL.
@@ -645,6 +700,28 @@ export const OPS = {
     await sleep(Math.min(step.ms ?? 500, 5000));
   },
 };
+
+/**
+ * A checkbox, a switch or a radio, put in a state. The click is only made
+ * when the state differs — a click on a box already ticked would untick it,
+ * and a test that toggles is a different test every other run. The state is
+ * read back afterwards, so a control the page refused to change is a failure
+ * with the state in it, not a pass.
+ */
+async function setChecked(page, step, ctx, want) {
+  await pointAt(page, step.target, ctx, { at: step.at, timeout: step.timeout });
+  const box = el(page, step.target, ctx);
+  let before;
+  try { before = await box.isChecked({ timeout: step.timeout ?? TIMEOUT }); }
+  catch (e) { throw new Error(`${step.target} is not a checkbox, a switch or a radio: ${String(e.message).split('\n')[0]}`); }
+  if (before !== want) {
+    await ctx.cursor.click(performanceAt(ctx.pace ?? PACE).press);
+    await settle(page, step.settle);
+  }
+  const after = await box.isChecked({ timeout: step.timeout ?? TIMEOUT });
+  if (after !== want) throw new Error(`${step.target} is still ${after ? 'ticked' : 'unticked'} after the click`);
+  ctx.emit?.({ t: 'log', level: 'info', msg: `${want ? 'ticked' : 'unticked'} ${step.target}${before === want ? ' (it already was)' : ''}` });
+}
 
 /**
  * A verb is only finished when both halves exist.
