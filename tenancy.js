@@ -37,6 +37,7 @@ import * as history from './runs.js';
 import * as suites from './suites.js';
 import * as monitors from './monitor.js';
 import * as schedules from './schedules.js';
+import * as notify from './notify.js';
 import * as support from './support.js';
 import * as chat from './chat.js';
 
@@ -66,6 +67,8 @@ export function workspace(org) {
       monitors: monitors.forOrg(org),
       // What runs on its own: suites on a cadence, monitored pages swept (schedules.js).
       schedules: schedules.forOrg(org),
+      // Where it is told: its channels (notify.js).
+      notify: notify.forOrg(org),
       support: support.forOrg(org),
       chat: chat.forOrg(org),
     };

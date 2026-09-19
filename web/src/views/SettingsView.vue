@@ -28,6 +28,7 @@ import Field from '@/components/Field.vue';
 import ReauthSheet from '@/components/ReauthSheet.vue';
 import UpgradePrompt from '@/components/UpgradePrompt.vue';
 import ThemeSwitch from '@/components/ThemeSwitch.vue';
+import NotifyPanel from '@/components/NotifyPanel.vue';
 
 const live = useLive();
 const session = useSession();
@@ -168,6 +169,9 @@ async function remove(o) {
         Set in <code>.ghostclick/{{ state?.org ?? 'local' }}/secrets.json</code> on the runner<template v-if="!session.required">, or with <code>GC_SECRET_NAME=value</code></template>.
       </p>
     </section>
+
+    <!-- Where the runner tells somebody when nobody has a page open (notify.js). -->
+    <NotifyPanel />
 
     <!-- The one setting that is the person's, not the organisation's: how this
          browser draws the app. Remembered here, never on the server. -->

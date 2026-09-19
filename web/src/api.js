@@ -190,6 +190,14 @@ export const api = {
   removeSchedule: (id) => req(`/api/schedules/${id}`, { method: 'DELETE' }),
   runSchedule:    (id) => req(`/api/schedules/${id}/run`, { method: 'POST' }),
 
+  // Notifications: where an incident, a failed run or a defect is told
+  // (notify.js). Channels are the organisation's; managers set them.
+  notify:        () => req('/api/notify'),
+  createChannel: (body) => req('/api/notify/channels', { method: 'POST', body }),
+  updateChannel: (id, body) => req(`/api/notify/channels/${id}`, { method: 'PATCH', body }),
+  removeChannel: (id) => req(`/api/notify/channels/${id}`, { method: 'DELETE' }),
+  testChannel:   (id) => req(`/api/notify/channels/${id}/test`, { method: 'POST' }),
+
   // Help & support: a request from the top bar, and the access switch it turns on.
   support:        () => req('/api/support'),
   requestSupport: (body) => req('/api/support/request', { method: 'POST', body }),
