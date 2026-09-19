@@ -545,32 +545,75 @@ const historyFor = (space, ent) => {
 };
 const historyOf = (req) => historyFor(req.space, req.ent);
 
-app.get('/api/runs', (req, res) => res.json(historyOf(req).summary(14, req.query.suite || null)));
-app.get('/api/defects', (req, res) => res.json(historyOf(req).defects(14)));
+/**
+ * The organisation's defects (defects.js), brought up to date with its
+ * history before they are read and pruned on the plan's schedule — closed
+ * ones, that is: an open defect is kept however old it is, because it is
+ * still true.
+ */
+const defectsFor = (space, ent) => {
+  const { defects } = space;
+  defects.sync(historyFor(space, ent).list());
+  defects.prune(ent.limit('history.retention_days'));
+  return defects;
+};
+const defectsOf = (req) => defectsFor(req.space, req.ent);
 
 /**
- * The defects as the chat's tools read them (chat-tools.js). This runner
- * derives them from history rather than numbering and filing them, so the
- * rows are the same shape with no id and no severity, `byId` is false — the
- * tool that reads one by number is not offered — and a run names no defect.
+ * The defects as the chat's tools read them (chat-tools.js): the store, with
+ * the two questions its routes answer out of history folded in — one status
+ * at a time, and the failed runs behind one number. `byId` says this runner
+ * numbers its defects, so the tool that reads one by number is offered.
  */
 const chatDefectsFor = (space, ent) => {
-  const rows = () => historyFor(space, ent).defects(14).defects.map((d) => ({
-    id: null, status: d.open ? 'open' : 'closed', severity: null, hits: d.hits, reopened: 0,
-    firstSeen: d.first, lastSeen: d.last, title: d.error, target: null,
-    cases: d.cases.map((c) => c.name), suites: d.suites.slice(),
-  }));
+  const defects = defectsFor(space, ent);
   return {
-    byId: false,
-    list: (status = 'open') => rows().filter((d) => status === 'all' || d.status === status),
-    totals: () => {
-      const all = rows();
-      const open = all.filter((d) => d.status === 'open').length;
-      return { all: all.length, open, reopened: 0, known_issue: 0, wont_fix: 0, closed: all.length - open, unassigned: open };
-    },
-    idFor: () => null,
+    byId: true,
+    list: (status = 'open') => defects.list().filter((d) => status === 'all' || d.status === status),
+    totals: () => defects.totals(),
+    get: (id) => defects.get(id),
+    idFor: (run) => defects.idFor(run),
+    runsOf: (id, limit = 5) => defects.runsOf(id, space.history.list(), limit),
   };
 };
+
+app.get('/api/runs', (req, res) => {
+  const summary = historyOf(req).summary(14, req.query.suite || null);
+  const defects = defectsOf(req);
+  // Each failed run names its defect, so a history table can link to the
+  // number. Copies: `latest` holds history's own entries, and a field set on
+  // one of those would be written into runs.json by the next run.
+  summary.latest = summary.latest.map((r) => ({ ...r, defect: defects.idFor(r) }));
+  res.json(summary);
+});
+
+app.get('/api/defects', (req, res) => {
+  const defects = defectsOf(req);
+  res.json({ defects: defects.list(), totals: defects.totals() });
+});
+
+/** One defect by any spelling of its number, with its activity and the failed runs history still holds. */
+app.get('/api/defects/:id', (req, res) => {
+  try {
+    const defects = defectsOf(req);
+    const defect = defects.get(req.params.id);
+    res.json({ ok: true, defect, runs: defects.runsOf(defect.id, req.space.history.list()) });
+  } catch (err) { fail(res, err, err.name === 'NoSuchDefect' ? 404 : 400); }
+});
+
+/**
+ * Triage: assign, overrule the severity, park as a known issue or won't-fix.
+ * An owner's or admin's, like the other changes to what the organisation
+ * keeps (docs/AUTH.md §10) — but not step-up, since none of it reaches the
+ * browser. Who made the change is read from the token and nowhere else.
+ */
+app.patch('/api/defects/:id', (req, res) => {
+  try {
+    tenancy.requireManager(req.user);
+    const by = { sub: req.user?.sub ?? null, email: req.user?.email ?? null };
+    sendOk(res, { defect: defectsOf(req).triage(req.params.id, req.body, by) });
+  } catch (err) { fail(res, err, err.name === 'NoSuchDefect' ? 404 : 400); }
+});
 
 /**
  * Pictures for the hero panels, if anyone has put any there.
@@ -1365,7 +1408,7 @@ app.get('/api/incidents', (req, res) => {
 app.post('/api/incidents/:id/resolve', async (req, res) => {
   try {
     const engine = monitorsOf(req);
-    const inc = await engine.resolve(req.params.id, 'manual');
+    const inc = await engine.resolve(req.params.id, 'manual', req.user ? { sub: req.user.sub ?? null, email: req.user.email ?? null } : null);
     const m = engine.monitors.get(inc.monitorId);
     sendOk(res, { incident: inc, monitor: m ? engine.publicMonitor(m) : null });
   } catch (err) { fail(res, err); }
@@ -2081,6 +2124,19 @@ notify.configure({
 monitoring.configure({
   emitTo,
   notify: (org, event, data) => { notify.send(org, event, data); },
+  // An incident is a defect too (defects.js incident): filed as it opens,
+  // closed as it resolves, under the same numbers as a failed run's — and
+  // said in the log and on the sockets the way a run's filing is. The
+  // incident's own notification carries the number, so none is sent here.
+  defects: (org, event, data) => {
+    const space = tenancy.workspace(org);
+    let suiteName = null;
+    if (data.monitor?.suiteId) { try { suiteName = space.suites.get(String(data.monitor.suiteId))?.name ?? null; } catch { suiteName = null; } }
+    const { id, changes } = space.defects.incident(event, { ...data, suiteName });
+    for (const ch of changes) emitTo(org, { t: 'log', level: ch.kind === 'closed' ? 'info' : 'warn', msg: `${ch.id} ${ch.kind}: ${ch.title}` });
+    if (changes.length) emitTo(org, { t: 'defects.changed', changes });
+    return id;
+  },
   log: console,
   llm: { mode: MONITOR_LLM.mode, model: MONITOR_LLM.mode === 'claude' ? MONITOR_MODEL : null, key: { have: Boolean(MONITOR_KEY.key), from: MONITOR_KEY.source } },
   resolver: monitorResolver,
@@ -2233,12 +2289,31 @@ async function run(plan, meta = {}) {
       url: plan.steps.find((s) => s.op === 'goto')?.url ?? '',
       ms: results.reduce((a, r) => a + (r.ms ?? 0), 0),
       results,
+      steps: plan.steps,
       scheduled: meta.scheduled === true,
     });
     space.history.prune(ent.limit('history.retention_days'));
-    // Somebody may want to hear about a failed run when nobody has a page open (notify.js): queued, never waited for.
+    // What this run filed, closed or reopened (defects.js), said in the log as
+    // it happens: a number that turns up on the Defects page with no word
+    // about where it came from reads as somebody else's. Like the report
+    // below, failing at it must not cost the run its verdict.
+    let defect = null;
+    try {
+      const changes = space.defects.sync(space.history.list());
+      for (const c of changes) {
+        say({ t: 'log', level: c.kind === 'closed' ? 'info' : 'warn', msg: `${c.id} ${c.kind}: ${c.title}` });
+        // A defect filed or reopened is told (notify.js): queued, never waited for.
+        if (c.kind === 'filed' || c.kind === 'reopened') notify.send(space.org, 'defect', { kind: c.kind, id: c.id, title: c.title, suite: plan.suite });
+      }
+      // And the Defects page, open in a tab somewhere, reloads its list.
+      if (changes.length) emitTo(space.org, { t: 'defects.changed', changes });
+      defect = space.defects.idFor(entry);
+    } catch (err) {
+      say({ t: 'log', level: 'error', msg: `could not file the defect: ${err.message}` });
+    }
+    // And a failed run, with the step it stopped on and the defect it went under.
     if (!ok) {
-      notify.send(space.org, 'run_failed', { suite: plan.suite, caseName: meta.caseName ?? null, passed, total: results.length, error: entry.error, step: entry.step, doing: entry.target ?? null, defect: null, scheduled: meta.scheduled === true, page: entry.url, url: entry.url });
+      notify.send(space.org, 'run_failed', { suite: plan.suite, caseName: meta.caseName ?? null, passed, total: results.length, error: entry.error, step: entry.step, doing: entry.target ?? null, defect, scheduled: meta.scheduled === true, page: entry.url, url: entry.url });
     }
     // Same function, same IR — with outcomes folded in, the plan diagram
     // becomes the run report. Drawing it is a nicety; failing to draw it must

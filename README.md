@@ -645,21 +645,93 @@ Open answered `Only http and https can be driven, not about:`.
 appears and you get an unexplained white rectangle instead of the black one it
 replaced.
 
-## Defects, read out of run history
+## Defects: numbered, filed by the runner, triaged by people
 
-Run history answers "what happened". Defects answers "what is broken", which is
-a different question and was not being asked anywhere.
+Run history answers "what happened". Defects answers "what is broken", and gives
+each answer a number you can say out loud and paste into a ticket.
 
-A run records only its first failure, because a run stops there — so a defect is
-that sentence, and the useful questions about it are how often it has happened,
-which cases it takes down, and whether it is still happening. Grouping by the
-message rather than by the case is the point: one broken selector usually breaks
-four cases, and four rows saying the same thing is a list, not a diagnosis.
+**The number is `DEF-YYMM-NNN`.** `DEF-2609-007` is the seventh distinct failure
+first seen in September 2026 (UTC). The counter starts again at 001 each month,
+grows past three digits rather than wrapping, and a number is never handed out
+twice — not after a restart, and not after the defect it named has been
+forgotten. It is found however it is typed: `def-2609-7`, `2609-007` and
+`#2609-7` all mean `DEF-2609-007`.
 
-Nothing here is hand-managed and there is no state to keep in sync. A defect is
-**open** when no affected case has passed since it last failed, so it closes
-itself when the thing is fixed — a tracker nobody has to remember to update is
-the only kind that stays true.
+**Nobody files a defect.** A run records only its first failure, because a run
+stops there, so a defect is that sentence, about the step that failed, on the
+site it happened on. Grouping by what failed rather than by the case is the
+point: one broken selector takes down four cases, and four rows saying the same
+thing is a list, not a diagnosis. The step is part of it because a sentence is
+not always about anything — Playwright says `locator.waitFor: Timeout 8000ms
+exceeded.` of every wait that runs out, and a missing receipt and a missing
+price are two defects. How long something waited is not part of it: "…in the
+10.5s this waited" and "…10.4s…" are one defect. (Runs recorded before a run
+named its step have no step to match on; the first run that does, with the same
+sentence on the same site, takes their defect over, number and all.) After every
+run, the runner:
+
+- **files** a failure it has not seen before, under the next number;
+- **closes** every open defect whose case has just passed;
+- **reopens** a closed defect that fails again, under the same number.
+
+Each lands in the defect's activity as ghostclick's, and in the console log as it
+happens (`DEF-2609-007 filed: …`). The reporter is always the application.
+
+**A monitor's incident is a defect too.** A monitored element — or the whole
+page — that breaks its rule and is confirmed (the monitoring section below) is
+filed here as the incident opens, under the same numbers as a failed run, with
+the monitor and the checks that failed as its identity and the incident's
+evidence as its own: the failed checks, the verdict's word, the clips before
+and after. It closes as the incident resolves — on its own when the page
+recovers, by a person accepting the new state (the activity says who), or by
+Claude judging the change fine — reopens under the same number when the same
+rule breaks the same way again, and closes when its monitor is deleted. It has
+no cases, so a passing run never closes it. The incident's notification and
+its card carry the number, and the Defects page is one list for what is
+broken, whichever way the runner found out.
+
+**The Defects page** is that list, drawn the way a good issue tracker draws
+one: the numbers first (open, needing attention, from monitors, closed this
+week), a search and one-press filters — open, parked, closed; runs or
+monitors; each severity — with the count behind each, and a dense row per
+defect: the severity as a shape and a word before a colour, the number, the
+sentence, where (the suites and cases, or the monitor and its page), the
+source, the status, how often, when last, who has it. A row opens a drawer
+beside the list with the whole story — the evidence, the runs that hit it or
+the clips, the activity, and the triage for an owner or admin — and the
+drawer has an address, `/defects/DEF-2609-007`, so a number in a chat reply, a
+run's row or a notification opens straight onto it. The list follows the
+runner over the socket (`defects.changed`): a run or an incident that files,
+closes or reopens one redraws it.
+
+**Severity is worked out, and a person can overrule it.** Critical when the case
+could not get past its first step, or three or more cases went down with it;
+major when two did, or when it came back after being fixed; minor otherwise.
+Trivial is only ever a person's call.
+
+**People triage.** An owner or admin can assign a defect, overrule its severity,
+or park it as a **known issue** or **won't fix** — the only fields a person
+writes, each recorded with who changed it. A parked defect that starts passing is
+closed like any other, so if it comes back it comes back *reopened*, for someone
+to look at again, rather than hidden under an old "won't fix".
+
+A status is the first of these that is true: `closed` (passing again),
+`known_issue`, `wont_fix`, `reopened`, `open`.
+
+| Route | |
+|---|---|
+| `GET /api/defects` | every defect kept, and how many are in each status |
+| `GET /api/defects/:id` | one defect by any spelling of its number, with its activity and the failed runs history still holds |
+| `PATCH /api/defects/:id` | `{assignee, severity, resolution}`, owners and admins only; `null` gives a field back to the runner, and anything else is a 400 that changes nothing |
+
+`GET /api/runs` names each failed run's defect as `defect`, so a history table
+can link to the number.
+
+The registry is `.ghostclick/<org>/defects.json`, beside the history it is read
+out of, and is brought up to date from that history after every run and before
+every read. Closed defects are forgotten on the plan's `history.retention_days`,
+like runs; an open one is kept however old it is. `npm run check:defects` holds
+all of the above to account, the routes included.
 
 ## Hero images
 
@@ -918,6 +990,13 @@ check:monitoring` walks it: the ticker learned, a swapped class ignored, the
 reworded hero caught by the words rule, a new table row caught by the layout
 rule with the cells named and the sections below it moved down.
 
+An incident is also a defect. The moment one opens it is filed under a
+`DEF-YYMM-NNN` number like a failed run's (the Defects section), with the
+failed checks and both clips as its evidence; the incident card, the log and
+the notification carry the number, and the defect closes when the incident
+resolves. The Defects page is where a person triages it — assigns it, grades
+it, parks it — beside everything the runs found.
+
 Two things worth knowing about the security model. A monitor's selector is data
 handed to `querySelector` inside a script the RUNNER installs; the flow
 language still has no evaluate and no selector, and the page never gets a way
@@ -955,7 +1034,11 @@ Three smaller things moved with this. Light, dark or the device's theme is a
 setting, so it lives on *Origins & vault → Appearance* rather than in the
 sidebar; the sidebar's collapse control is at the top, where a hand goes
 looking for it, and Sign out is at the foot; and Run history's suite filter sits
-with the tables it narrows instead of in the top bar.
+with the tables it narrows instead of in the top bar. The pages a person sees
+before they are signed in — sign in, sign up, the code, the reset, an
+invitation — are always light, whatever theme was chosen for the app: they are
+drawn once, in daylight, and `public/theme-boot.js` decides that before the
+first paint so a dark-mode browser never flashes them dark first.
 
 ## Chat: ask the runner what it knows
 

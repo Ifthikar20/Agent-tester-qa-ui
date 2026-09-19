@@ -116,10 +116,9 @@ const stopped = computed(() => {
       <button v-else type="button" class="rounded-full border border-hairline px-3 py-1 text-[12px] hover:border-ink/25 disabled:opacity-60"
               :disabled="saving" @click="$emit('save')">{{ saving ? 'Saving…' : 'Save as a case' }}</button>
     </div>
-    <!-- The defects page has no page per defect yet, so the number links to
-         the list it is on rather than to a route that would fall through. -->
-    <RouterLink v-if="run?.defect" to="/defects"
+    <!-- The number opens the defect itself: the list with its drawer open. -->
+    <RouterLink v-if="run?.defect" :to="`/defects/${run.defect}`"
                 class="mt-1.5 inline-block text-[12px] text-brand-2 underline underline-offset-2"
-                :title="`Filed as ${run.defect} — open the defects page`">{{ run.defect }}</RouterLink>
+                :title="`Filed as ${run.defect} — open it`">{{ run.defect }}</RouterLink>
   </div>
 </template>

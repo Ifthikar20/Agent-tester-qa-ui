@@ -14,7 +14,13 @@
  * canvas a browser paints before any stylesheet arrives is already the right
  * colour — the device's preference alone is not the viewer's choice.
  *
- * Keep in step with resolve() in src/theme.js.
+ * The pages that render with nobody signed in — the landing page, sign in,
+ * sign up, the code, the reset, an invitation (router.js `meta.open`) — are
+ * light whatever was chosen: a sign-in screen is the one page a person sees
+ * before they are anyone here, and it is drawn once, in daylight. Decided
+ * here too, so a dark-mode browser never flashes them dark first.
+ *
+ * Keep in step with resolve() in src/theme.js and paintTheme() in App.vue.
  */
 (function () {
   var saved = null;
@@ -25,6 +31,8 @@
   } else {
     try { dark = !!window.matchMedia('(prefers-color-scheme: dark)').matches; } catch (e) { dark = false; }
   }
+  var path = window.location.pathname.replace(/^\/app(?=\/|$)/, '') || '/';
+  if (path === '/' || /^\/(login|signup|verify|forgot-password|reset-password|invite)(\/|$)/.test(path)) dark = false;
   var theme = dark ? 'dark' : 'light';
   document.documentElement.setAttribute('data-theme', theme);
   var meta = document.querySelector('meta[name="color-scheme"]');

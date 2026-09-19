@@ -32,7 +32,8 @@ const routes = [
       { path: 'runs', name: 'suite-runs', component: () => import('@/views/SuiteRuns.vue') },
     ],
   },
-  { path: '/defects', name: 'defects', component: () => import('@/views/DefectsView.vue') },
+  // The list, and the list with one defect's drawer open (/defects/DEF-2609-007): a number is a link.
+  { path: '/defects/:id?', name: 'defects', component: () => import('@/views/DefectsView.vue') },
   { path: '/console', name: 'console', component: () => import('@/views/ConsoleView.vue') },
   // Watch an element on the driven page against a rule in plain English.
   { path: '/monitoring', name: 'monitoring', component: () => import('@/views/MonitoringView.vue') },

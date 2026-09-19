@@ -33,6 +33,7 @@
     "check:vocabulary": "node scripts/check-vocabulary.js",
     "check:schedules": "node scripts/check-schedules.js",
     "check:notify": "node scripts/check-notify.js",
+    "check:defects": "node scripts/check-defects.js",
     "check:startup": "node scripts/check-startup.js",
     "check:history": "node scripts/check-history.js",
     "check:keys": "node scripts/check-keys.js",

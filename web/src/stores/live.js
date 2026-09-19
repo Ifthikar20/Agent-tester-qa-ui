@@ -108,6 +108,8 @@ export const useLive = defineStore('live', {
     picking: false,     // the runner's picker is armed on the page
     /** Bumped when a schedule fires or the list changes (schedule.fired, schedules.changed): the panels reload on it. */
     schedulesVersion: 0,
+    /** Bumped when a run or an incident filed, closed or reopened a defect (defects.changed): the Defects page reloads on it. */
+    defectsVersion: 0,
     picked: null,       // { selector, fingerprint, snapshot, label, url, path, readError, shot } from monitor.selected (+ monitor.shot)
     pickError: null,    // a sentence for the Pick button, from a refusal
     hover: null,        // { describe, tag, text, w, h, fontSize }: what the picker is over, while picking
@@ -455,6 +457,7 @@ export const useLive = defineStore('live', {
           break;
         }
         case 'schedules.changed': this.schedulesVersion++; break;
+        case 'defects.changed': this.defectsVersion++; break;
         case 'suite.start':
           this.suiteRun = { suite: ev.suite, cases: ev.cases, done: 0, passed: 0 };
           this.say(`running ${ev.cases} case${ev.cases === 1 ? '' : 's'} of ${ev.suite}`);

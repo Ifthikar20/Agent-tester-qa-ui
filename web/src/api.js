@@ -121,6 +121,9 @@ export const api = {
   socketTicket: () => req('/api/socket-ticket', { method: 'POST' }),
   runs:    (suite) => req(`/api/runs${suite ? `?suite=${encodeURIComponent(suite)}` : ''}`),
   defects: () => req('/api/defects'),
+  // One defect by its number, with its activity and the runs behind it; a triage is an owner's or admin's PATCH.
+  defect:       (id) => req(`/api/defects/${encodeURIComponent(id)}`),
+  triageDefect: (id, body) => req(`/api/defects/${encodeURIComponent(id)}`, { method: 'PATCH', body }),
   hero:    () => req('/api/hero'),
   siteIcon: (origin) => bytes(`/api/sites/icon?origin=${encodeURIComponent(origin)}`),
 

@@ -67,7 +67,11 @@ watch(() => route.fullPath, () => {
  *
  * The landing page is drawn in its own palette and is not themed, so the
  * document stays light while it shows — otherwise the scrollbar and any native
- * control on it would turn dark around a light page.
+ * control on it would turn dark around a light page. So does every page that
+ * renders with nobody signed in (router.js `meta.open`: sign in, sign up, the
+ * code, the reset, an invitation): a sign-in screen is drawn once, in daylight,
+ * whatever the viewer chose for the app behind it. public/theme-boot.js makes
+ * the same call before the first paint.
  */
 function paintTheme(dark) {
   const root = document.documentElement;
@@ -84,7 +88,7 @@ function paintTheme(dark) {
   void root.offsetHeight;
   setTimeout(() => root.removeAttribute('data-theme-switching'), 1);
 }
-watch(() => ui.dark && route.name !== 'landing', paintTheme, { immediate: true, flush: 'post' });
+watch(() => ui.dark && !route.meta.open, paintTheme, { immediate: true, flush: 'post' });
 
 let device = null;
 const onDevice = (e) => { ui.systemDark = e.matches; };

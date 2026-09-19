@@ -140,7 +140,7 @@ const match = (rows) => rows.filter((r) => (r.suite ?? '').toLowerCase().include
                 <td class="px-5 py-3">
                   <p>{{ r.suite }}</p>
                   <p class="mt-0.5 text-[12px] text-ink-3">
-                    {{ when(r.at) }}<template v-if="r.error"> · {{ r.error }}</template>
+                    {{ when(r.at) }}<template v-if="r.defect"> · <RouterLink :to="`/defects/${r.defect}`" class="font-mono text-brand-2 hover:underline" :title="`Filed as ${r.defect} — open it`">{{ r.defect }}</RouterLink></template><template v-if="r.error"> · {{ r.error }}</template>
                   </p>
                 </td>
                 <td class="px-3 py-3 tabular-nums text-ink-2">
