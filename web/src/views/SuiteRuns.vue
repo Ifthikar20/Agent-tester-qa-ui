@@ -3,7 +3,8 @@ import { computed, ref, watch } from 'vue';
 import { api } from '@/api';
 import { useSuites } from '@/stores/suites';
 import { useLive } from '@/stores/live';
-import RunsChart from '@/components/RunsChart.vue';
+import { runsSpec } from '@/charts';
+import Chart from '@/components/Chart.vue';
 import StatusPill from '@/components/StatusPill.vue';
 import StatTile from '@/components/StatTile.vue';
 import EmptyState from '@/components/EmptyState.vue';
@@ -62,7 +63,7 @@ const dur = (ms) => (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`);
             <span class="flex items-center gap-1.5"><i class="size-2.5 rounded-[3px] bg-fail" /> Failed</span>
           </span>
         </div>
-        <RunsChart :days="data.days" class="mt-3" />
+        <Chart :spec="runsSpec(data.days)" class="mt-3" :height="240" :legend="false" />
       </section>
 
       <section class="card overflow-hidden">

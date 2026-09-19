@@ -3,7 +3,8 @@ import { onMounted, ref } from 'vue';
 import { api } from '@/api';
 import HeroPanel from '@/components/HeroPanel.vue';
 import TopBar from '@/components/TopBar.vue';
-import RunsChart from '@/components/RunsChart.vue';
+import { runsSpec } from '@/charts';
+import Chart from '@/components/Chart.vue';
 import StatTile from '@/components/StatTile.vue';
 import StatusPill from '@/components/StatusPill.vue';
 import EmptyState from '@/components/EmptyState.vue';
@@ -54,7 +55,7 @@ const match = (rows) => rows.filter((r) => (r.suite ?? '').toLowerCase().include
       </div>
 
       <div class="mb-5 grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-        <section class="card p-5">
+        <section class="card min-w-0 p-5">
           <div class="flex items-baseline gap-3">
             <h2 class="text-[15px] font-medium">Runs per day</h2>
             <span class="text-[13px] text-ink-3">The last fourteen days.</span>
@@ -63,10 +64,10 @@ const match = (rows) => rows.filter((r) => (r.suite ?? '').toLowerCase().include
               <span class="flex items-center gap-1.5"><i class="size-2.5 rounded-[3px] bg-fail" /> Failed</span>
             </span>
           </div>
-          <RunsChart :days="data.days" class="mt-3" />
+          <Chart :spec="runsSpec(data.days)" class="mt-3" :height="240" :legend="false" />
         </section>
 
-        <section class="card wash-warm p-5">
+        <section class="card min-w-0 wash-warm p-5">
           <h2 class="text-[15px] font-medium">Passing</h2>
           <p class="mt-1 text-[13px] text-ink-2">Share of runs that finished clean.</p>
           <p class="mt-5 display text-5xl tabular-nums">

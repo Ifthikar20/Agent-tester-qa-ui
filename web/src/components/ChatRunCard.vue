@@ -16,10 +16,14 @@ import { computed } from 'vue';
 import { labelAction, showAction } from '@lang';
 import StatusPill from '@/components/StatusPill.vue';
 
+/** Where a translated check came from, in words (chat-translate.js frameworkWord). */
+const FROM = { playwright: 'Playwright', cypress: 'Cypress', selenium: 'Selenium', puppeteer: 'Puppeteer', flow: 'the flow language', table: 'a table' };
+
 const props = defineProps({
   /**
    * A kept run: { suiteId, suite, caseId, caseName, ok, passed, total, step, error, target, defect, at, oneOff? }
-   * — and, for a drafted check (chat-plan.js): draft, candidate, verdict, attempts, revised, cite, hint, flow, pageId.
+   * — and, for a drafted check (chat-plan.js): draft, candidate, verdict, attempts, revised, cite, hint, flow, pageId;
+   * for a check translated from a file (chat-translate.js): imported, from.
    */
   run: { type: Object, default: null },
   /** live.run: { suite, caseName, total, steps: [{ i, state, ms, error, step }] } */
@@ -80,7 +84,8 @@ const stopped = computed(() => {
   }
   const r = props.run;
   if (!r || r.ok || !(r.error || r.target)) return null;
-  return { target: r.target ?? (r.step != null ? `step ${r.step}` : 'a step'), error: r.error ?? 'failed' };
+  // The kept step is an index (server.js heal.step); the reply counts from one, so the card does too.
+  return { target: r.target ?? (r.step != null ? `step ${r.step + 1}` : 'a step'), error: r.error ?? 'failed' };
 });
 </script>
 
@@ -89,7 +94,8 @@ const stopped = computed(() => {
     <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
       <StatusPill :ok="ok" :label="ok === null ? 'Running' : null" size="sm" />
       <span class="min-w-0 truncate font-medium text-ink" :title="title">{{ title }}</span>
-      <span v-if="run?.draft" class="text-ink-3">(drafted check{{ run.attempts > 1 ? `, ${run.attempts} attempts` : '' }})</span>
+      <span v-if="run?.imported" class="text-ink-3">(translated from {{ FROM[run.from] ?? run.from ?? 'code' }})</span>
+      <span v-else-if="run?.draft" class="text-ink-3">(drafted check{{ run.attempts > 1 ? `, ${run.attempts} attempts` : '' }})</span>
       <span v-else-if="run?.oneOff" class="text-ink-3">(one-off check)</span>
       <span class="ml-auto shrink-0 tabular-nums text-ink-3">passed {{ passed }}/{{ total }} steps</span>
     </div>
@@ -104,7 +110,8 @@ const stopped = computed(() => {
     <!-- A drafted check's verdict: the test was wrong, the app is broken, or a person is needed. -->
     <p v-if="verdict" class="mt-1.5 text-[12px] leading-relaxed" :class="verdict.tone">{{ verdict.text }}</p>
     <!-- A passing draft becomes a case only by this press (ChatView keep). -->
-    <div v-if="run?.draft && run.ok && run.flow" class="mt-2">
+    <p v-if="run?.imported && run.ok && run.flow && !run.suiteId" class="mt-2 text-[12px] text-ink-3">Passed, but no suite covers its origin to keep it in — quickstart the site first.</p>
+    <div v-else-if="run?.draft && run.ok && run.flow" class="mt-2">
       <span v-if="saved" class="text-[12px] text-ink-3">Saved as a case — find it under the suite's cases.</span>
       <button v-else type="button" class="rounded-full border border-hairline px-3 py-1 text-[12px] hover:border-ink/25 disabled:opacity-60"
               :disabled="saving" @click="$emit('save')">{{ saving ? 'Saving…' : 'Save as a case' }}</button>

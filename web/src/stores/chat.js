@@ -23,11 +23,14 @@
 import { defineStore } from 'pinia';
 import { api } from '@/api';
 
-/** The runner's own limits (chat.js), mirrored so the page can say so before asking. */
+/** The runner's own limits (chat.js, chat-import.js), mirrored so the page can say so before asking. */
 export const TEXT_MAX = 2000;
+export const ATTACHMENTS_MAX = 4;
+export const ATTACHMENT_MAX_BYTES = 256 * 1024;
+export const ATTACHMENTS_MAX_BYTES = 300 * 1024;
 const TITLE_MAX = 60;
 /** The tools that drive a run: while one is in flight the page shows the live run under the tool line. */
-export const RUN_TOOLS = new Set(['run_case', 'run_suite', 'run_page_check', 'quickstart', 'run_drafts', 'plan_page_tests']);
+export const RUN_TOOLS = new Set(['run_case', 'run_suite', 'run_page_check', 'quickstart', 'run_drafts', 'plan_page_tests', 'run_import']);
 /** Events held while a send() waits on its 202; past this many, something else is wrong. */
 const EARLY_MAX = 200;
 /** Turn ids that finished, remembered so a stale answer to GET /api/chat cannot resurrect one. */
@@ -161,11 +164,16 @@ export const useChatStore = defineStore('chat', {
      * @param confirm the id of the proposal a button confirmed, when one did
      * @param choices which of the proposal's items were ticked — the drafted
      *          checks to run (chat.js); absent means all of them
+     * @param attachments the files riding with the words (ChatComposer):
+     *          `[{ name, size, kind, encoding, data }]`; with no words, the
+     *          question is the one the runner would ask of such a file
      * @returns whether the runner took the turn — a refusal is in `error`
      *          (or `upgrade`, or `on`), never thrown at the view
      */
-    async send(text, { confirm = null, choices = null } = {}) {
-      const asked = String(text ?? '').trim().slice(0, TEXT_MAX);
+    async send(text, { confirm = null, choices = null, attachments = null } = {}) {
+      const files = Array.isArray(attachments) ? attachments.slice(0, ATTACHMENTS_MAX) : [];
+      let asked = String(text ?? '').trim().slice(0, TEXT_MAX);
+      if (!asked && files.length) asked = files.some((f) => f.kind === 'code' || f.kind === 'flow') ? 'Turn this into checks' : 'What is in this file?';
       if (!asked || this.pending) return false;
       this.error = null;
       const conversationId = this.current?.id ?? null;
@@ -177,6 +185,7 @@ export const useChatStore = defineStore('chat', {
           text: asked,
           ...(confirm ? { confirm } : {}),
           ...(confirm && Array.isArray(choices) && choices.length ? { choices } : {}),
+          ...(files.length ? { attachments: files.map((f) => ({ name: f.name, encoding: f.encoding, data: f.data })) } : {}),
         });
       } catch (e) {
         // Whatever landed meanwhile was somebody else's turn: read it as it
@@ -214,6 +223,7 @@ export const useChatStore = defineStore('chat', {
       this.current.messages.push({
         id: `local_${r.turnId}`, role: 'user', at, text: asked, by: null, mind: null, model: null,
         tools: [], runs: [], offers: null, proposal: null, executed: null, error: null,
+        ...(files.length ? { attachments: files.map((f) => ({ name: f.name, kind: f.kind, size: f.size })) } : {}),
       });
       this.current.updatedAt = at;
       // A button's yes or no takes the proposal with it; the runner drops it

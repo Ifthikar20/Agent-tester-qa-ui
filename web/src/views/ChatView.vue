@@ -15,10 +15,12 @@
  * sidebar under Chat (SideNav), on every page. While a reply is being made,
  * the agents at work on it are drawn step by step (ChatActivity).
  *
- * Nothing a reply says runs anything by itself. A scan, a quickstart or a
- * batch of drafted checks is a PROPOSAL, and the buttons under it are the
- * only way it happens — that is the runner's rule (chat.js), and this page
- * only draws it.
+ * Nothing a reply says runs anything by itself. A scan, a quickstart, a
+ * batch of drafted checks or of checks translated from a file is a
+ * PROPOSAL, and the buttons under it are the only way it happens — that is
+ * the runner's rule (chat.js), and this page only draws it. Files ride with
+ * the words from the composer (ChatComposer), and a reply's charts are drawn
+ * under it (ChatData).
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { api } from '@/api';
@@ -45,6 +47,7 @@ const suites = useSuites();
 const chat = useChatStore();
 
 const draft = ref('');
+const files = ref([]);          // what rides with the next send (ChatComposer v-model:files)
 const composer = ref(null);   // the ChatComposer on the page, whichever place it is drawn in
 const scroller = ref(null);   // the transcript's own scroll container
 const column = ref(null);     // what grows inside it
@@ -133,11 +136,16 @@ function startFresh() {
 // ---------------------------------------------------------------- asking
 async function submit() {
   const text = draft.value.trim();
-  if (!text || !canSend.value || chat.pending) return;
+  const attached = files.value;
+  if ((!text && !attached.length) || !canSend.value || chat.pending) return;
   draft.value = '';
-  const sent = await chat.send(text);
-  // A refusal keeps the words: nobody should retype a question the runner would not take.
-  if (!sent && !draft.value) draft.value = text;
+  files.value = [];
+  const sent = await chat.send(text, { attachments: attached });
+  // A refusal keeps the words and the files: nobody should retype a question the runner would not take.
+  if (!sent) {
+    if (!draft.value) draft.value = text;
+    if (!files.value.length) files.value = attached;
+  }
 }
 const ask = (text, opts) => { if (canSend.value) chat.send(text, opts); };
 
@@ -286,7 +294,7 @@ onBeforeUnmount(() => { ro?.disconnect(); clearTimeout(settleTimer); });
               Defects, runs, suites and saved cases — or name a page to test. Every number comes from the
               runner's own records.
             </p>
-            <ChatComposer ref="composer" v-model="draft" class="mt-8" :can-send="canSend" :placeholder="placeholder"
+            <ChatComposer ref="composer" v-model="draft" v-model:files="files" class="mt-8" :can-send="canSend" :placeholder="placeholder"
                           :busy="!!chat.turn" :running="!!chat.turn?.running" :stopping="!!chat.stopping" :other-turn="otherTurn"
                           @submit="submit" @stop="chat.stop()" />
             <p v-if="chat.error" class="mt-2 rounded-lg border border-critical/25 bg-critical/5 px-3 py-2 text-[12.5px] text-critical">{{ chat.error }}</p>
@@ -307,9 +315,21 @@ onBeforeUnmount(() => { ro?.disconnect(); clearTimeout(settleTimer); });
           <!-- transcript ---------------------------------------------------- -->
           <ol v-else class="space-y-6">
             <li v-for="m in messages" :key="m.id" class="flex flex-col" :class="m.role === 'user' ? 'items-end' : 'items-start'">
-              <div v-if="m.role === 'user'" data-message="user"
-                   class="max-w-[72%] whitespace-pre-wrap rounded-2xl rounded-br-md border border-hairline bg-panel px-4 py-2.5
-                          text-[13.5px] leading-relaxed text-ink [overflow-wrap:anywhere]">{{ m.text }}</div>
+              <template v-if="m.role === 'user'">
+                <div data-message="user"
+                     class="max-w-[72%] whitespace-pre-wrap rounded-2xl rounded-br-md border border-hairline bg-panel px-4 py-2.5
+                            text-[13.5px] leading-relaxed text-ink [overflow-wrap:anywhere]">{{ m.text }}</div>
+                <!-- The files that rode with the words: their names and shapes, never their contents (chat.js attachments). -->
+                <ul v-if="m.attachments?.length" class="mt-1.5 flex max-w-[72%] flex-wrap justify-end gap-1.5" aria-label="Attached files">
+                  <li v-for="a in m.attachments" :key="a.name"
+                      class="inline-flex max-w-full items-center gap-1.5 rounded-full border border-hairline bg-panel px-2.5 py-0.5 text-[11.5px] text-ink-2"
+                      :title="`${a.name} — ${a.kind}${a.rows != null ? `, ${a.rows} rows × ${a.columns} columns` : a.lines != null ? `, ${a.lines} lines` : ''}`">
+                    <Icon :name="a.kind === 'code' || a.kind === 'flow' ? 'code' : a.kind === 'table' ? 'chart' : 'list'" class="size-3 shrink-0 text-ink-3" />
+                    <span class="truncate">{{ a.name }}</span>
+                    <span class="shrink-0 text-ink-3">{{ a.rows != null ? `${a.rows} rows` : a.framework ?? a.kind }}</span>
+                  </li>
+                </ul>
+              </template>
               <!-- An answer is plain text on the page. The runner's own short
                    notes (mind: runner) are the engine talking, not an answer,
                    and sit in a muted box; a dead turn sits in a red one. -->
@@ -359,6 +379,7 @@ onBeforeUnmount(() => { ro?.disconnect(); clearTimeout(settleTimer); });
                    tick some, press Run, and the ticked ids ride on the yes. -->
               <div v-if="awaiting(m)" class="mt-3 w-full rounded-xl border border-brand/20 bg-brand-50 px-3 py-2 text-[12.5px]">
                 <ChatDraftList v-if="m.proposal.items?.length" :items="m.proposal.items" :disabled="!canSend || !!chat.turn || otherTurn"
+                               :intro="m.proposal.kind === 'run_import' ? 'Checks translated from your code — tick the ones to run. Each runs once, as it is; a passing one can be kept as a case afterwards.' : null"
                                @run="(ids) => runDrafts(m, ids)" @drop="ask('No, leave it')" />
                 <div v-else class="flex flex-wrap items-center gap-2">
                   <span class="text-ink">Go ahead and {{ m.proposal.label }}?</span>
@@ -400,7 +421,7 @@ onBeforeUnmount(() => { ro?.disconnect(); clearTimeout(settleTimer); });
         </svg>
       </button>
       <div class="mx-auto w-full max-w-3xl">
-        <ChatComposer ref="composer" v-model="draft" :can-send="canSend" :placeholder="placeholder"
+        <ChatComposer ref="composer" v-model="draft" v-model:files="files" :can-send="canSend" :placeholder="placeholder"
                       :busy="!!chat.turn" :running="!!chat.turn?.running" :stopping="!!chat.stopping" :other-turn="otherTurn"
                       @submit="submit" @stop="chat.stop()" />
         <p v-if="chat.error" class="mt-2 rounded-lg border border-critical/25 bg-critical/5 px-3 py-2 text-[12.5px] text-critical">{{ chat.error }}</p>

@@ -72,6 +72,17 @@
   --color-critical:   #d03b3b;
   --color-warn:       #a86b00;
 
+  /* The four hues a chart may give to series that are neither a pass/fail
+     nor a status (charts.js): a fixed order, never cycled past four, chosen
+     and checked together — neighbours ≥ ΔE 8 under protanopia and
+     deuteranopia, ≥ ΔE 15 to normal sight — on this surface and the dark
+     one below. Two of the light steps sit under 3:1 on white, which is why
+     every chart also has its values as a table. */
+  --color-series-1:   #2a78d6;
+  --color-series-2:   #eb6834;
+  --color-series-3:   #1baf7a;
+  --color-series-4:   #eda100;
+
   /* Text on a solid fill of ink or of critical, and the veil behind a sheet.
      White, and a tint of ink, while the ground is light; at night ink itself
      turns light, so each needs a value of its own. */
@@ -151,6 +162,11 @@ html { color-scheme: light; }
     --color-good:       #46cf5e;
     --color-critical:   #f26b6b;
     --color-warn:       #e3a33b;
+
+    --color-series-1:   #3987e5;
+    --color-series-2:   #d95926;
+    --color-series-3:   #199e70;
+    --color-series-4:   #c98500;
 
     --color-on-ink:      #0e0f13;
     --color-on-critical: #0e0f13;

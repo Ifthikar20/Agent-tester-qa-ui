@@ -65,13 +65,18 @@ src/
   api.js         the HTTP surface, one function per endpoint
   markdown.js    the little markdown a chat reply may use, parsed to a tree the
                  page draws as text — never as HTML
+  charts.js      every chart, one way: a spec (labels, series, a role each) to a
+                 Chart.js configuration in the theme's own tokens — the one
+                 runtime dependency the UI has taken, for the one thing worth it
+  agents.js      which agent a chat tool belongs to, for the badges
   app.css        Tailwind v4 + the design tokens (brand, ink, surfaces)
   stores/
     live.js      the one WebSocket: frames, cursor, steps, console, navs
     suites.js    suites and cases, cached
     session.js   who you are, and the short-lived token the runner takes
   views/         one per route
-  components/    the small shared pieces
+  components/    the small shared pieces — Chart.vue draws a spec, ChatComposer
+                 takes the words and the files, ChatData draws what a reply read
   icons/         PNG icons by name, plus the line-art fallbacks (see icons/README.md)
   lang/          a CHECKED COPY of the backend's vocabulary.js — do not edit
                  here; edit the original and run `npm run sync:lang`

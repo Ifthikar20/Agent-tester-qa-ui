@@ -50,6 +50,10 @@ export const GLYPHS = {
   list:    'M5.5 4.5h8M5.5 8h8M5.5 11.5h8M2.5 4.5h.01M2.5 8h.01M2.5 11.5h.01',
   play:    'M4.5 2.8v10.4L13 8z',
   spark:   'M8 2.2l1.5 4.3L13.8 8l-4.3 1.5L8 13.8l-1.5-4.3L2.2 8l4.3-1.5z',
+  // The chat's files and charts: the paperclip on the composer, the agents that read a file, translate code, draw a chart.
+  paperclip: 'M13 7.5l-5.2 5.2a3 3 0 0 1-4.3-4.3L9 3a2 2 0 0 1 2.9 2.9L6.6 11.2a1 1 0 0 1-1.5-1.5l4.8-4.8',
+  code:    'M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5M9.2 3 6.8 13',
+  chart:   'M2.5 13.5h11M4.5 11V7.5M8 11V4M11.5 11V9',
 };
 
 /**

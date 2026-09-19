@@ -3,17 +3,19 @@
  * What a reply's tools read, drawn.
  *
  * The defect rows, the runs per day, a suite's pages and cases, the pages
- * scanned, the monitors — shaped by the tool that read them (chat-tools.js
- * `view`) and kept on the reply (chat.js `data`). Tiles for the numbers, the
- * dashboard's own chart for runs per day, a table for rows, and one bar for
- * defects by severity: the same pieces the pages use, so a figure here reads
- * like the same figure there. The words above are the mind's; every number
- * here is the tool's, which is what lets a person check the one against the
- * other.
+ * scanned, the monitors, a chart asked for in words, a table somebody
+ * attached — shaped by the tool that read them (chat-tools.js `view`) and
+ * kept on the reply (chat.js `data`). Tiles for the numbers, the one chart
+ * component every page uses (Chart.vue) for runs per day, defects by
+ * severity and cases by suite, a table for rows: the same pieces the pages
+ * use, so a figure here reads like the same figure there. The words above
+ * are the mind's; every number here is the tool's, which is what lets a
+ * person check the one against the other.
  */
 import { computed } from 'vue';
 import { when } from '@/time';
-import RunsChart from '@/components/RunsChart.vue';
+import { countsSpec, runsSpec } from '@/charts';
+import Chart from '@/components/Chart.vue';
 import StatusPill from '@/components/StatusPill.vue';
 
 const props = defineProps({ view: { type: Object, required: true } });
@@ -25,12 +27,14 @@ const at = (t) => { if (!t) return 'never'; const n = typeof t === 'number' ? t 
 const cap = (s, n = 90) => (s == null ? '' : String(s).length > n ? `${String(s).slice(0, n - 1)}…` : String(s));
 const sum = (rows, k) => (rows ?? []).reduce((a, r) => a + (Number(r[k]) || 0), 0);
 
-const TITLE = { runs: 'Runs', defects: 'Defects', defect: 'Defect', suites: 'Suites', suite: 'Suite', pages: 'Pages scanned', monitoring: 'Monitoring' };
+const TITLE = { runs: 'Runs', defects: 'Defects', defect: 'Defect', suites: 'Suites', suite: 'Suite', pages: 'Pages scanned', monitoring: 'Monitoring', table: 'Table' };
 const title = computed(() => {
   const x = v.value;
   if (x.kind === 'defect') return x.id;
   if (x.kind === 'suite') return x.name ?? 'Suite';
   if (x.kind === 'defects') return `Defects · ${x.status ?? 'open'}`;
+  if (x.kind === 'chart') return x.title ?? 'Chart';
+  if (x.kind === 'table') return x.name ?? 'Table';
   return TITLE[x.kind] ?? 'Data';
 });
 const note = computed(() => {
@@ -40,6 +44,8 @@ const note = computed(() => {
     case 'defects': return `${x.rows?.length ?? 0} listed`;
     case 'suite': return x.origin ? `${x.origin}${x.allowed === false ? ' · origin not allowed' : ''}` : '';
     case 'pages': return 'most recently scanned first';
+    case 'chart': return x.subtitle ?? '';
+    case 'table': return `${x.total ?? x.rows?.length ?? 0} row${(x.total ?? x.rows?.length) === 1 ? '' : 's'}${x.sheet ? ` · ${x.sheet}` : ''}${(x.total ?? 0) > (x.rows?.length ?? 0) ? `, the first ${x.rows.length} shown` : ''}`;
     default: return '';
   }
 });
@@ -63,14 +69,27 @@ const tiles = computed(() => {
   }
 });
 
-/** Defects by severity, of the rows listed — the one bar a list of defects deserves. */
-const SEVERITY_TONE = { high: 'bg-critical', critical: 'bg-critical', medium: 'bg-warn', low: 'bg-ink/30', unrated: 'bg-ink/15' };
-const severities = computed(() => {
-  if (v.value.kind !== 'defects') return [];
-  const by = new Map();
-  for (const r of v.value.rows ?? []) { const k = r.severity ?? 'unrated'; by.set(k, (by.get(k) ?? 0) + 1); }
-  const total = v.value.rows?.length || 1;
-  return [...by].sort((a, b) => b[1] - a[1]).map(([name, n]) => ({ name, n, pct: (n / total) * 100, tone: SEVERITY_TONE[name] ?? 'bg-ink/15' }));
+/**
+ * The charts a view carries: runs per day for runs, the rows by severity
+ * for defects (a status colour each), cases by suite when there is more
+ * than one suite to compare — and a chart view is its own spec.
+ */
+const SEVERITY_ROLE = { high: 'critical', critical: 'critical', blocker: 'critical', major: 'warn', medium: 'warn' };
+const SEVERITY_ORDER = ['critical', 'blocker', 'high', 'major', 'medium', 'low', 'minor', 'trivial', 'unrated'];
+const chart = computed(() => {
+  const x = v.value;
+  if (x.kind === 'chart') return x;
+  if (x.kind === 'runs') return x.days?.length ? runsSpec(x.days) : null;
+  if (x.kind === 'defects' && x.rows?.length) {
+    const by = new Map();
+    for (const r of x.rows) { const k = String(r.severity ?? 'unrated').toLowerCase(); by.set(k, (by.get(k) ?? 0) + 1); }
+    const rows = [...by].sort((a, b) => (SEVERITY_ORDER.indexOf(a[0]) + 1 || 99) - (SEVERITY_ORDER.indexOf(b[0]) + 1 || 99)).map(([name, value]) => ({ name, value }));
+    // One severity is one bar, and that bar is a number the tiles already show.
+    if (rows.length < 2) return null;
+    return countsSpec('Defects by severity', rows, { horizontal: false, roles: (r) => SEVERITY_ROLE[r.name] ?? 'neutral' });
+  }
+  if (x.kind === 'suites' && (x.rows?.length ?? 0) > 1) return countsSpec('Cases by suite', x.rows.map((r) => ({ name: r.name, value: r.cases })), { value: 'value' });
+  return null;
 });
 const statusTone = (s) => (s === 'open' ? 'bg-critical/10 text-critical' : s === 'reopened' ? 'bg-warn/10 text-warn' : 'bg-ink/5 text-ink-2');
 </script>
@@ -94,9 +113,11 @@ const statusTone = (s) => (s === 'open' ? 'bg-critical/10 text-critical' : s ===
       </div>
     </div>
 
-    <!-- runs: the chart, then the latest -->
+    <!-- the chart a view carries, drawn the way every page draws one -->
+    <div v-if="chart" class="mt-3"><Chart :spec="chart" :height="view.kind === 'chart' ? 240 : 200" /></div>
+
+    <!-- runs: the latest -->
     <template v-if="view.kind === 'runs'">
-      <div v-if="view.days?.length" class="mt-3"><RunsChart :days="view.days" /></div>
       <div v-if="view.latest?.length" class="mt-3 overflow-x-auto">
         <table class="w-full text-left">
           <thead class="table-head"><tr><th class="px-2 py-1.5 font-medium">When</th><th class="px-2 py-1.5 font-medium">Suite · case</th><th class="px-2 py-1.5 font-medium">Steps</th><th class="px-2 py-1.5 font-medium">Result</th><th class="px-2 py-1.5 font-medium">What stopped it</th></tr></thead>
@@ -113,16 +134,8 @@ const statusTone = (s) => (s === 'open' ? 'bg-critical/10 text-critical' : s ===
       </div>
     </template>
 
-    <!-- defects: one bar by severity, then the rows -->
+    <!-- defects: the rows -->
     <template v-else-if="view.kind === 'defects'">
-      <div v-if="severities.length" class="mt-3">
-        <div class="flex h-2 w-full overflow-hidden rounded-full bg-ground" role="img" :aria-label="severities.map((s) => `${s.name} ${s.n}`).join(', ')">
-          <div v-for="s in severities" :key="s.name" :class="s.tone" :style="{ width: `${s.pct}%` }" />
-        </div>
-        <p class="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11.5px] text-ink-2">
-          <span v-for="s in severities" :key="s.name" class="inline-flex items-center gap-1.5"><span class="size-2 rounded-full" :class="s.tone" />{{ s.name }} · {{ s.n }}</span>
-        </p>
-      </div>
       <div v-if="view.rows?.length" class="mt-3 overflow-x-auto">
         <table class="w-full text-left">
           <thead class="table-head"><tr><th class="px-2 py-1.5 font-medium">Defect</th><th class="px-2 py-1.5 font-medium">Severity</th><th class="px-2 py-1.5 font-medium">Title</th><th class="px-2 py-1.5 font-medium">Cases</th><th class="px-2 py-1.5 font-medium">Hits</th><th class="px-2 py-1.5 font-medium">Last seen</th><th class="px-2 py-1.5 font-medium">Status</th></tr></thead>
@@ -239,5 +252,18 @@ const statusTone = (s) => (s === 'open' ? 'bg-critical/10 text-critical' : s ===
       </ul>
       <p v-else-if="!view.monitors?.length" class="mt-2 text-ink-3">No monitors yet.</p>
     </template>
+
+    <!-- a table somebody attached: its columns and first rows -->
+    <div v-else-if="view.kind === 'table'" class="mt-3 overflow-x-auto">
+      <table v-if="view.rows?.length" class="w-full text-left">
+        <thead class="table-head"><tr><th v-for="(c, i) in view.columns" :key="i" class="whitespace-nowrap px-2 py-1.5 font-medium">{{ c.name }}<span v-if="c.type !== 'text'" class="ml-1 font-normal text-ink-3">{{ c.type }}</span></th></tr></thead>
+        <tbody>
+          <tr v-for="(r, i) in view.rows" :key="i" class="border-t border-hairline">
+            <td v-for="(c, j) in view.columns" :key="j" class="px-2 py-1.5 [overflow-wrap:anywhere]" :class="c.type === 'number' ? 'tabular-nums text-ink-2' : 'text-ink'">{{ r[j] }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <p v-else class="text-ink-3">An empty table.</p>
+    </div>
   </div>
 </template>

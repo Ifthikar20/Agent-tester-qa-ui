@@ -17,6 +17,8 @@ const props = defineProps({
   /** [{ id, name, steps, flow, why? }] — the proposal's items */
   items: { type: Array, default: () => [] },
   disabled: Boolean,
+  /** The sentence above the list; the drafted checks' own unless the caller has another (translated checks). */
+  intro: { type: String, default: null },
 });
 const emit = defineEmits(['run', 'drop']);
 
@@ -32,7 +34,7 @@ const rowsOf = (flow) => Math.min(12, Math.max(3, String(flow ?? '').split('\n')
 
 <template>
   <div>
-    <p class="text-ink">Drafted checks — tick the ones to run. Each runs once and, when the check rather than the page was wrong, is fixed and run once more.</p>
+    <p class="text-ink">{{ intro ?? 'Drafted checks — tick the ones to run. Each runs once and, when the check rather than the page was wrong, is fixed and run once more.' }}</p>
     <ul class="mt-2 space-y-1.5">
       <li v-for="i in items" :key="i.id" class="rounded-lg border border-hairline bg-panel px-3 py-2">
         <div class="flex items-start gap-2">

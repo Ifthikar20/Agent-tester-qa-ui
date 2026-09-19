@@ -27,6 +27,10 @@ export const AGENTS = Object.freeze({
   plan_page_tests: { name: 'Planner', icon: 'spark' },
   run_drafts:      { name: 'Runner', icon: 'play' },
   docs:            { name: 'Docs', icon: 'list' },
+  attachment:      { name: 'Files', icon: 'paperclip' },
+  translate_code:  { name: 'Translator', icon: 'code' },
+  run_import:      { name: 'Runner', icon: 'play' },
+  chart:           { name: 'Analyst', icon: 'chart' },
 });
 
 /** The agent a tool belongs to; an unknown tool is the runner's. */
