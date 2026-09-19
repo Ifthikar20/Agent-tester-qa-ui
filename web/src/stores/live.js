@@ -360,6 +360,16 @@ export const useLive = defineStore('live', {
     },
 
     handle(ev) {
+      // Scheduled work runs on the organisation's own pooled page (the runner's
+      // backgroundSession), so its run and step events are not the console's:
+      // said in a line, never drawn as the live run. Its log lines, and what
+      // the schedule came to, come through as themselves.
+      if (ev.background && !['log', 'schedule.fired', 'schedules.changed'].includes(ev.t)) {
+        if (ev.t === 'suite.start') this.say(`scheduled: running ${ev.cases} case${ev.cases === 1 ? '' : 's'} of ${ev.suite} in the background`);
+        if (ev.t === 'suite.end') this.say(`scheduled: ${ev.suite}: ${ev.passed}/${ev.total} cases passed`, ev.passed === ev.total ? 'info' : 'error');
+        if (ev.t === 'run.end' && ev.caseName) this.say(`scheduled: ${ev.caseName} ${ev.ok ? 'passed' : 'failed'}`, ev.ok ? 'info' : 'error');
+        return;
+      }
       switch (ev.t) {
         case 'ready':
           // The greeting names the organisation and its origins and says who

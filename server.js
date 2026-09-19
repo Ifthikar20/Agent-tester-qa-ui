@@ -25,6 +25,7 @@ import { Recorder } from './recorder.js';
 import { NavigationLog } from './navlog.js';
 import * as monitoring from './monitor.js';
 import * as schedules from './schedules.js';
+import { BrowserPool, PoolFull } from './pool.js';
 import { MonitorAgent } from './monitor-page.js';
 import { findApiKey, createResolver, createBudget, MODEL as MONITOR_MODEL } from './monitor-resolver.js';
 import { llmModeFrom, compactSnapshot, previewSpec } from './monitor-rules.js';
@@ -208,6 +209,8 @@ let recorder = null;
 let running = false;
 /** What runs with nobody at the console (schedules.js), up once the browser is. */
 let scheduler = null;
+/** Pooled contexts for that work (pool.js), one per organisation; made with the browser. */
+let pool = null;
 /**
  * The rest of the driven session, and why these are `let` rather than `const`.
  *
@@ -414,7 +417,7 @@ app.use('/app', (req, res, next) => {
  */
 app.get('/healthz', (_req, res) => {
   res.set('Cache-Control', 'no-store');
-  res.status(browserReady ? 200 : 503).json({ ok: browserReady, browser: browserReady, busy: running });
+  res.status(browserReady ? 200 : 503).json({ ok: browserReady, browser: browserReady, busy: running, pool: pool ? pool.stats() : null });
 });
 
 /**
@@ -962,15 +965,22 @@ app.post('/api/suites/:id/run', async (req, res) => {
  * refused before case one, not discovered halfway. And the plan before the
  * lock: a run the plan refuses never takes the browser.
  */
-async function runCasesOf({ suite, wanted, pace = PACE, space, ent, scheduled = false }) {
+async function runCasesOf({ suite, wanted, pace = PACE, space, ent, scheduled = false, session = null }) {
   if (!wanted.length) throw new Error('This suite has no cases to run');
   ent.check('runs.per_day', space.history.today(), wanted.length);
-  await take(space.org);
-  if (running) throw Object.assign(new Error('A run is in progress'), { status: 409 });
+  // On a pooled session (a schedule's) the console's lock is not taken: the
+  // suite runs on the organisation's own page, beside whatever the console does.
+  if (session) {
+    if (session.running) throw Object.assign(new Error('A run is in progress'), { status: 409 });
+  } else {
+    await take(space.org);
+    if (running) throw Object.assign(new Error('A run is in progress'), { status: 409 });
+  }
+  const say = session ? session.emit : emit;
 
   const checkFlow = checkFlowFor(space);
 
-  emit({ t: 'suite.start', suite: suite.name, cases: wanted.length });
+  say({ t: 'suite.start', suite: suite.name, cases: wanted.length });
   const outcomes = [];
   for (const c of wanted) {
     let plan;
@@ -979,20 +989,20 @@ async function runCasesOf({ suite, wanted, pace = PACE, space, ent, scheduled = 
     } catch (err) {
       // An unparseable case is a failed case, not a dead suite.
       outcomes.push({ case: c.id, name: c.name, ok: false, error: err.message });
-      emit({ t: 'log', level: 'error', msg: `${c.name}: ${err.message}` });
+      say({ t: 'log', level: 'error', msg: `${c.name}: ${err.message}` });
       continue;
     }
     plan.suite = `${suite.name} · ${c.name}`;
-    emit({ t: 'diagram', kind: 'plan', mermaid: toMermaid(plan) });
+    say({ t: 'diagram', kind: 'plan', mermaid: toMermaid(plan) });
     // Express 4 does not catch a rejection from an async handler, so an
     // unexpected throw here would take the process with it rather than failing
     // one case. A suite run survives a bad case.
-    const r = await run(plan, { suiteId: suite.id, caseId: c.id, caseName: c.name, pace, space, ent, scheduled })
+    const r = await run(plan, { suiteId: suite.id, caseId: c.id, caseName: c.name, pace, space, ent, scheduled, session })
       .catch((err) => ({ ok: false, passed: 0, total: 0, error: err.message }));
     outcomes.push({ case: c.id, name: c.name, ...r });
   }
   const passed = outcomes.filter((o) => o.ok).length;
-  emit({ t: 'suite.end', suite: suite.name, passed, total: outcomes.length });
+  say({ t: 'suite.end', suite: suite.name, passed, total: outcomes.length });
   return { suite: suite.id, passed, total: outcomes.length, outcomes };
 }
 
@@ -1009,40 +1019,38 @@ async function fireSchedule(org, s) {
   const claims = s.claims ?? null;
   if (claims && tenancy.stale(claims)) return { ok: false, error: 'the plan changed since this schedule was saved — save it again' };
   const ent = tenancy.entitlements(claims);
-  const held = () => running || (recorder?.recording ?? false);
-  if (held()) throw new schedules.Deferred('a run or a recording holds the browser');
-  const lock = async () => {
-    try { await take(org); }
-    catch (err) { if (err instanceof tenancy.RunnerBusy) throw new schedules.Deferred(err.message); throw err; }
-  };
+  // The organisation's own pooled page (backgroundSession): a schedule never
+  // takes the console's, so it runs beside whatever a person is doing there.
+  const session = await backgroundSession(org);
+  if (session.running) throw new schedules.Deferred("this organisation's scheduled work is still running");
   if (s.kind === 'suite') {
     const suite = space.suites.get(s.suiteId);
     if (!suite.cases.length) return { ok: false, error: 'the suite has no cases to run' };
     const origin = originOf(suite);
     if (!space.origins.has(origin)) return { ok: false, error: `${origin} is not allowed — allow it under Origins & vault` };
-    await lock();
-    const r = await runCasesOf({ suite, wanted: suite.cases, space, ent, scheduled: true });
+    const r = await runCasesOf({ suite, wanted: suite.cases, space, ent, scheduled: true, session });
     return { ok: r.passed === r.total, passed: r.passed, total: r.total };
   }
   const urls = [...new Set(space.monitors.list().filter((m) => m.state !== 'paused' && m.url).map((m) => m.url))];
   if (!urls.length) return { ok: true, pages: 0, of: 0, note: 'nothing to sweep: no monitors' };
-  await lock();
   let opened = 0;
   const errors = [];
-  for (const url of urls) {
-    if (held()) { errors.push('stopped: the browser was taken'); break; }
-    let origin;
-    try { origin = new URL(url).origin; } catch { errors.push(`${url}: not an address`); continue; }
-    if (!space.origins.has(origin)) { errors.push(`${url}: ${origin} is not allowed`); continue; }
-    try {
-      await OPS.goto(page, { url }, { cursor, emit, nav, onNavigate: publishTargets, origins: space.origins });
-      opened++;
-    } catch (err) { errors.push(`${url}: ${String(err.message).split('\n')[0]}`); continue; }
-    // The document arms its monitors on load; each gets this long to be measured (monitor.js ARM_GRACE_MS).
-    await sleep(monitoring.ARM_GRACE_MS + 1500);
-    driver.touch(org);
-  }
-  emit({ t: 'log', level: 'info', msg: `swept ${opened} of ${urls.length} monitored page${urls.length === 1 ? '' : 's'}` });
+  session.running = true;
+  try {
+    for (const url of urls) {
+      let origin;
+      try { origin = new URL(url).origin; } catch { errors.push(`${url}: not an address`); continue; }
+      if (!space.origins.has(origin)) { errors.push(`${url}: ${origin} is not allowed`); continue; }
+      try {
+        await OPS.goto(session.page, { url }, { cursor: session.cursor, emit: session.emit, nav: session.nav, origins: space.origins });
+        opened++;
+      } catch (err) { errors.push(`${url}: ${String(err.message).split('\n')[0]}`); continue; }
+      // The document arms its monitors on load; each gets this long to be measured (monitor.js ARM_GRACE_MS).
+      await sleep(monitoring.ARM_GRACE_MS + 1500);
+      pool?.touch(org);
+    }
+  } finally { session.running = false; }
+  session.emit({ t: 'log', level: 'info', msg: `swept ${opened} of ${urls.length} monitored page${urls.length === 1 ? '' : 's'}` });
   const open = space.monitors.listIncidents('open').length;
   return { ok: errors.length === 0, pages: opened, of: urls.length, openIncidents: open, ...(errors.length ? { error: errors.slice(0, 3).join('; ') } : {}) };
 }
@@ -1314,7 +1322,7 @@ app.post('/api/schedules/:id/run', (req, res) => {
   let s;
   try { s = space.schedules.get(req.params.id); } catch (err) { return fail(res, err, 404); }
   if (!scheduler) return fail(res, new Error('the scheduler is not up yet'), 503);
-  if (scheduler.firing || running || (recorder?.recording ?? false)) return fail(res, new Error('the runner is busy — try again when the run has ended'), 409);
+  if (scheduler.firing) return fail(res, new Error('a schedule is already firing — try again when it has ended'), 409);
   // A fire may take minutes: answered now, reported on the socket (schedule.fired) when it ends.
   scheduler.runNow(space.org, s.id).catch((err) => emitTo(space.org, { t: 'log', level: 'error', msg: `schedule "${s.name}": ${err.message}` }));
   res.status(202).json({ ok: true, firing: true, id: s.id });
@@ -1578,6 +1586,56 @@ const browser = await chromium.launch({
   executablePath: process.env.CHROMIUM_PATH || undefined,
   args: ['--disable-dev-shm-usage', '--force-color-profile=srgb'],
 });
+
+// What runs with nobody at the console (schedules.js) leases the organisation's
+// own context from this pool (pool.js), so it runs beside a person driving the
+// console's page, never in their place. The console's page stays the singleton.
+pool = new BrowserPool(browser, { max: Math.max(1, Number(process.env.GC_POOL_MAX) || 2), idleMs: 5 * 60_000, viewport: VIEW });
+
+/**
+ * A pooled session for an organisation's scheduled work: its own context and
+ * page, wired with what a run needs — the reach rule, a cursor, a navigation
+ * log, and a monitoring agent reporting into the organisation's engine — and
+ * nothing a person needs: no screencast, no recorder, no target panel. Made
+ * once per lease and kept on it; the lease closes itself after five idle
+ * minutes (pool.js) and the session goes with it. Its events reach the
+ * organisation's sockets marked `background`, so the console does not draw
+ * them as its own run. A full pool is a Deferred: the schedule waits.
+ */
+async function backgroundSession(org) {
+  const space = tenancy.workspace(org);
+  let lease;
+  try { lease = await pool.acquire(org); }
+  catch (err) { if (err instanceof PoolFull) throw new schedules.Deferred(err.message); throw err; }
+  if (lease.session) { pool.touch(org); return lease.session; }
+  const say = (ev) => emitTo(org, { ...ev, background: true });
+  const { page: pg, context } = lease;
+  if (BLOCK_PRIVATE) {
+    await context.route('**/*', async (route) => {
+      const url = route.request().url();
+      const why = await blocked(url);
+      if (!why) return route.continue();
+      say({ t: 'log', level: 'error', msg: `blocked ${url} — ${why}` });
+      return route.abort('blockedbyclient');
+    });
+  }
+  const bgCdp = await context.newCDPSession(pg);
+  const bgCursor = new VirtualCursor(bgCdp, () => {});
+  const bgNav = new NavigationLog(pg, { onNavigation: (n) => say({ t: 'nav', ...n }) });
+  bgNav.attach();
+  const engine = space.monitors;
+  const bgAgent = new MonitorAgent(pg, {
+    owner: org,
+    listFor: (href) => engine.monitorsForPage(href),
+    onReport: (r) => engine.ingest(r),
+    onVisit: (href, list) => { if (list.length) engine.visited(href, list.map((m) => m.id)); },
+    onError: (msg) => say({ t: 'log', level: 'error', msg }),
+  });
+  await bgAgent.attach();
+  const session = { org, page: pg, cursor: bgCursor, nav: bgNav, agent: bgAgent, emit: say, running: false, background: true };
+  lease.session = session;
+  return session;
+}
 
 /**
  * Broadcast is per organisation (docs/AUTH.md §9.6 [websocket-3]).
@@ -2055,7 +2113,12 @@ const vaultFor = (space, ent) => ({
 async function run(plan, meta = {}) {
   const space = meta.space ?? local;
   const ent = meta.ent ?? tenancy.entitlements(null);
-  if (running) {
+  // A pooled session (backgroundSession) runs the plan on its own page, so a
+  // schedule never takes the console's; without one, this is the console's run.
+  const bg = meta.session ?? null;
+  const pg = bg ? bg.page : page;
+  const say = bg ? bg.emit : emit;
+  if (bg ? bg.running : running) {
     // An error, not a warning. A refused run does nothing visible, so if this
     // is quiet the only symptom is a button that appears not to work.
     emitTo(space.org, { t: 'log', level: 'error', msg: 'A run is already in progress — wait for it to finish' });
@@ -2064,7 +2127,9 @@ async function run(plan, meta = {}) {
   // A plan with no `goto` of its own is only allowed to run on a page this
   // organisation already holds — checked BEFORE the lock, so a refused plan
   // does not take the browser away from whoever has it.
-  const stray = unanchored(plan, space);
+  const stray = bg
+    ? (plan.steps[0]?.op === 'goto' ? null : { error: 'a scheduled run opens a page of its own — it starts with a goto' })
+    : unanchored(plan, space);
   if (stray) {
     emitTo(space.org, { t: 'log', level: 'error', msg: stray.error });
     if (stray.origin) emitTo(space.org, { t: 'needs.origin', origin: stray.origin, url: stray.url });
@@ -2075,17 +2140,17 @@ async function run(plan, meta = {}) {
   // organisation that asked, in the shape its UI acts on.
   try {
     ent.check('runs.per_day', space.history.today());
-    await take(space.org);
+    if (!bg) await take(space.org);
   } catch (err) {
     emitTo(space.org, { t: 'refused', of: 'run', ...refusal(err) });
     emitTo(space.org, { t: 'log', level: 'error', msg: err.message });
     return { ok: false, passed: 0, total: 0, error: err.message };
   }
-  running = true;
-  const wasRecording = recorder.recording;
-  recorder.recording = false;
+  if (bg) bg.running = true; else running = true;
+  const wasRecording = bg ? false : recorder.recording;
+  if (!bg) recorder.recording = false;
   // A run's clicks must reach the page: an active pick would swallow them.
-  if (monitorAgent?.picking) {
+  if (!bg && monitorAgent?.picking) {
     await monitorAgent.stopPicker().catch(() => null);
     if (monitorAgent.owner) emitTo(monitorAgent.owner, { t: 'monitor.pick', on: false });
   }
@@ -2094,10 +2159,10 @@ async function run(plan, meta = {}) {
   // A run can be told how much of itself to perform. Unset means this server's
   // default, so nothing that does not ask is affected.
   const ctx = {
-    cursor, emit, nav, onNavigate: publishTargets, pace: paceOf(meta.pace, PACE),
+    cursor: bg ? bg.cursor : cursor, emit: say, nav: bg ? bg.nav : nav, onNavigate: bg ? null : publishTargets, pace: paceOf(meta.pace, PACE),
     origins: space.origins, vault: vaultFor(space, ent),
   };
-  emit({ t: 'run.start', total: plan.steps.length, suite: plan.suite, suiteId: meta.suiteId, caseId: meta.caseId, caseName: meta.caseName, ...(meta.scheduled ? { scheduled: true } : {}) });
+  say({ t: 'run.start', total: plan.steps.length, suite: plan.suite, suiteId: meta.suiteId, caseId: meta.caseId, caseName: meta.caseName, ...(meta.scheduled ? { scheduled: true } : {}) });
 
   // Everything from here to the finally must be able to throw without wedging
   // the executor. It used to clear the lock on the happy path only, so a
@@ -2107,17 +2172,17 @@ async function run(plan, meta = {}) {
   // what that looks like from the outside.
   try {
     for (const [i, step] of plan.steps.entries()) {
-      emit({ t: 'step.start', i, step });
+      say({ t: 'step.start', i, step });
       const t0 = Date.now();
       try {
-        await OPS[step.op](page, step, ctx);
+        await OPS[step.op](pg, step, ctx);
         results.push({ i, ok: true, ms: Date.now() - t0 });
-        emit({ t: 'step.pass', i, ms: Date.now() - t0 });
+        say({ t: 'step.pass', i, ms: Date.now() - t0 });
       } catch (err) {
         results.push({ i, ok: false, ms: Date.now() - t0, error: err.message });
-        emit({ t: 'step.fail', i, ms: Date.now() - t0, error: err.message });
+        say({ t: 'step.fail', i, ms: Date.now() - t0, error: err.message });
         // A step the plan refused is a plan refusal, not a broken page.
-        if (err instanceof tenancy.EntitlementError) emit({ t: 'refused', of: 'run', ...refusal(err) });
+        if (err instanceof tenancy.EntitlementError) say({ t: 'refused', of: 'run', ...refusal(err) });
         break;
       }
       await sleep(120);
@@ -2140,11 +2205,11 @@ async function run(plan, meta = {}) {
     // becomes the run report. Drawing it is a nicety; failing to draw it must
     // not cost you the run's verdict.
     try {
-      emit({ t: 'diagram', kind: 'report', mermaid: toMermaid(plan, { results }) });
+      say({ t: 'diagram', kind: 'report', mermaid: toMermaid(plan, { results }) });
     } catch (err) {
-      emit({ t: 'log', level: 'error', msg: `could not draw the report: ${err.message}` });
+      say({ t: 'log', level: 'error', msg: `could not draw the report: ${err.message}` });
     }
-    await publishTargets();
+    if (!bg) await publishTargets();
     // The failing step, so a caller can say where a run stopped without
     // reading the history back (the chat does). This history keeps no target.
     return { ok, passed, total: results.length, error: entry.error, step: entry.step, target: entry.target ?? null };
@@ -2152,11 +2217,9 @@ async function run(plan, meta = {}) {
     // Clear the lock BEFORE announcing the end. run.end means "you may start
     // another run"; emitting it while still locked makes a caller that runs
     // back-to-back scripts hang on a silently refused second run.
-    running = false;
-    recorder.recording = wasRecording;
-    driver.touch(space.org);
-    armRelease();
-    emit({ t: 'run.end', ok: results.every((r) => r.ok) && results.length > 0, suiteId: meta.suiteId, caseId: meta.caseId, caseName: meta.caseName });
+    if (bg) bg.running = false;
+    else { running = false; recorder.recording = wasRecording; driver.touch(space.org); armRelease(); }
+    say({ t: 'run.end', ok: results.every((r) => r.ok) && results.length > 0, suiteId: meta.suiteId, caseId: meta.caseId, caseName: meta.caseName });
   }
 }
 
@@ -2506,8 +2569,8 @@ process.on('unhandledRejection', (err) => {
 });
 
 // ---- schedules: what runs with nobody at the console (schedules.js) -------------------------
-scheduler = new schedules.Scheduler({ fire: fireSchedule, busy: () => running || (recorder?.recording ?? false), emit: emitTo, log: console }).start();
+scheduler = new schedules.Scheduler({ fire: fireSchedule, emit: emitTo, log: console }).start();
 console.log(`  schedules   ${scheduler.known.size ? [...scheduler.known].map((o) => `${o}: ${tenancy.workspace(o).schedules.list().length}`).join(', ') : 'none yet'}`);
 
-process.on('SIGINT', async () => { scheduler?.stop(); monitoring.flushAll(); await browser.close(); process.exit(0); });
-process.on('SIGTERM', async () => { scheduler?.stop(); monitoring.flushAll(); await browser.close(); process.exit(0); });
+process.on('SIGINT', async () => { scheduler?.stop(); monitoring.flushAll(); await pool?.drain().catch(() => {}); await browser.close(); process.exit(0); });
+process.on('SIGTERM', async () => { scheduler?.stop(); monitoring.flushAll(); await pool?.drain().catch(() => {}); await browser.close(); process.exit(0); });
