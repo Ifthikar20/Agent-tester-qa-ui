@@ -8,8 +8,9 @@
  * mousemove in the driven page, the runner's picker outlines the element
  * INSIDE the page — so the outline arrives in the video — and a click chooses
  * it without reaching the page. The rail is the panel the proof of concept
- * drew inside the page: what was picked, the rule, the monitors. Incidents,
- * with their evidence, sit under the stage.
+ * drew inside the page: what was picked, the rule, the monitors — or, with
+ * nothing picked, the whole page watched for any change. Incidents, with
+ * their evidence, sit under the stage.
  *
  * Nothing here decides anything. The runner says when picking is on, what was
  * picked, what state a monitor is in and when an incident opens; the store
@@ -22,8 +23,9 @@ import { api } from '@/api';
 import { useLive } from '@/stores/live';
 import { useSuites } from '@/stores/suites';
 import {
-  chipText, chipTone, defaultRule, describeElement, diffChips, elementFacts, hoverLine, incidentPill, isBlank, llmBadge,
-  metricsLine, originOfUrl, pathOfUrl, projectOf, severityTone, specChips, stateTone, suggestionsFor, verdictSource,
+  PAGE_RULES, PAGE_SELECTOR, chipText, chipTone, clauseChips, defaultRule, describeElement, diffChips, elementFacts, hoverLine, incidentPill,
+  isBlank, llmBadge, metricsLine, originOfUrl, pageLines, pathOfUrl, projectOf, selectorLine, severityTone, specChips, stateTone, suggestionsFor,
+  verdictSource,
 } from '@/monitoring';
 import { clock, when } from '@/time';
 import TopBar from '@/components/TopBar.vue';
@@ -34,6 +36,7 @@ import UpgradePrompt from '@/components/UpgradePrompt.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import Stage from '@/components/Stage.vue';
 import Shot from '@/components/Shot.vue';
+import SchedulePanel from '@/components/SchedulePanel.vue';
 
 const live = useLive();
 const stage = ref(null);
@@ -53,6 +56,14 @@ const addError = ref(null);
 const added = ref(null);        // { label, path } of the monitor just created
 const preview = ref(null);      // the checks the rule box compiles to, from the runner
 const previewing = ref(false);
+const compiling = ref(false);   // Compile with Claude pressed, the runner has not answered yet
+const compileError = ref(null); // why the runner would not send the rule to Claude, in its words
+const pageForm = ref(false);    // Watch the whole page pressed: the form in place of the pick
+const pageLabel = ref('');
+const pageRule = ref(PAGE_RULES[0]);
+const pagePreview = ref(null);  // what the chosen page rule compiles to, from the runner
+const addingPage = ref(false);
+const pageError = ref(null);
 const only = ref('open');       // open | all
 const pending = ref(null);      // the id whose row action is in flight
 const rowError = ref(null);     // { id, msg }
@@ -90,11 +101,14 @@ watch(projectId, async (id) => {
 const isMine = (m) => !project.value || projectOf(m, suites.list)?.id === project.value.id;
 const monitors = computed(() => [...live.monitors].filter(isMine).sort((a, b) => b.createdAt - a.createdAt));
 const mineIds = computed(() => new Set(monitors.value.map((m) => m.id)));
+// "Open" is everything unresolved: an incident Claude is still judging is
+// not closed, whichever way it turns out.
+const unresolved = (i) => i.status !== 'resolved';
 const incidents = computed(() => live.incidents
-  .filter((i) => (!project.value || mineIds.value.has(i.monitorId)) && (only.value === 'all' || i.status === 'open'))
+  .filter((i) => (!project.value || mineIds.value.has(i.monitorId)) && (only.value === 'all' || unresolved(i)))
   .sort((a, b) => b.openedAt - a.openedAt));
 const openCount = computed(() => (project.value
-  ? live.incidents.filter((i) => i.status === 'open' && mineIds.value.has(i.monitorId)).length
+  ? live.incidents.filter((i) => unresolved(i) && mineIds.value.has(i.monitorId)).length
   : live.openIncidents));
 const suggestions = computed(() => suggestionsFor(live.picked?.snapshot));
 const facts = computed(() => elementFacts(live.picked?.snapshot));
@@ -104,6 +118,11 @@ const pickedText = computed(() => {
 });
 /** The script, as chips: what the rule in the box will check on every visit. */
 const previewChips = computed(() => (preview.value?.checks ?? []).map((c) => ({ text: chipText(c), title: c.message ?? '' })));
+/** Which compiler the runner has, 'claude' or 'mock': what a judged clause can promise depends on it. */
+const llmMode = computed(() => live.monitoring?.llm?.mode ?? null);
+/** Every clause of the rule as written, and what became of it. */
+const previewClauses = computed(() => clauseChips(preview.value, llmMode.value));
+const previewSource = computed(() => (preview.value?.source === 'claude' ? 'by Claude' : 'by rules'));
 const badge = computed(() => llmBadge(live.monitoring));
 /** Whether the runner can be sent to a monitor's page right now — the same refusals as a pick. */
 const canVisit = computed(() => live.connected && !live.busy && !live.running && !live.recording && !live.picking);
@@ -160,6 +179,7 @@ watch(() => live.painted, (p) => { if (p) opening.value = null; });
 // find the words for "it must still be there".
 watch(() => live.picked, (p) => {
   if (!p) return;
+  pageForm.value = false;
   label.value = p.label || describeElement(p.snapshot);
   rule.value = defaultRule(p.snapshot);
   addError.value = null;
@@ -178,14 +198,18 @@ watch(() => [live.picking, live.pickError, live.connected], () => { arming.value
 // sentence cannot land on top of the current one.
 let previewTimer = null;
 let previewSeq = 0;
+/** What either compiler is asked: the sentence, and the element it is about. */
+const previewBody = (p) => ({ ruleText: rule.value.trim(), tag: p.snapshot?.tag, selector: p.selector, label: label.value.trim() || p.label, baseline: p.snapshot });
 async function loadPreview() {
   const p = live.picked;
-  const ruleText = rule.value.trim();
-  if (!p || !ruleText) { preview.value = null; previewing.value = false; return; }
+  if (!p || !rule.value.trim()) { preview.value = null; previewing.value = false; compileError.value = null; return; }
   const mine = ++previewSeq;
   previewing.value = true;
+  // A new sentence is the mock's to read first; Claude's refusal of the old
+  // one was about words that are gone.
+  compileError.value = null;
   try {
-    const { spec } = await api.previewMonitor({ ruleText, tag: p.snapshot?.tag, selector: p.selector, label: label.value.trim() || p.label, baseline: p.snapshot });
+    const { spec } = await api.previewMonitor(previewBody(p));
     if (mine === previewSeq) preview.value = spec ?? null;
   } catch { if (mine === previewSeq) preview.value = null; }
   finally { if (mine === previewSeq) previewing.value = false; }
@@ -197,6 +221,32 @@ function schedulePreview(ms) {
 }
 watch(rule, () => schedulePreview(350));
 onBeforeUnmount(() => clearTimeout(previewTimer));
+/**
+ * The same sentence, read by Claude — one call from the day's budget, so a
+ * person sees what the model makes of it before saving. Its answer replaces
+ * the mock's preview until the sentence changes again, when the mock reads
+ * it first as usual. A refusal (no key, no budget, no answer) is a line
+ * under the chips, and the mock's spec that rides along with it stays up.
+ */
+async function compileWithClaude() {
+  const p = live.picked;
+  if (!p || !rule.value.trim() || compiling.value) return;
+  // A mock preview still owed to the last keystroke would land on top of
+  // Claude's answer: the pending one is dropped and an in-flight one outranked.
+  clearTimeout(previewTimer);
+  const mine = ++previewSeq;
+  previewing.value = false;
+  compiling.value = true;
+  compileError.value = null;
+  try {
+    const { spec } = await api.compileMonitor({ ...previewBody(p), fingerprint: p.fingerprint });
+    if (mine === previewSeq && spec) preview.value = spec;
+  } catch (e) {
+    if (mine !== previewSeq) return;
+    compileError.value = e.body?.message || e.message;
+    if (e.body?.spec) preview.value = e.body.spec;
+  } finally { compiling.value = false; }
+}
 
 // ------------------------------------------------------- opening a page
 // The console's own open and allow, so a person can point the runner at
@@ -277,6 +327,45 @@ async function addMonitor() {
   } finally { adding.value = false; }
 }
 
+// ------------------------------------------------------- the whole page
+// No element to pick: the page itself, every block on it, against one of
+// three rules. The runner measures it, watches it a moment to learn what
+// changes on its own, and keeps the blocks; this form only names the rule.
+function openPageForm() {
+  live.pickError = null;
+  added.value = null;
+  pageError.value = null;
+  pageLabel.value = '';
+  pageForm.value = true;
+  loadPagePreview();
+}
+async function loadPagePreview() {
+  try {
+    const { spec } = await api.previewMonitor({ ruleText: pageRule.value, tag: 'page', selector: PAGE_SELECTOR, label: pageLabel.value.trim() });
+    pagePreview.value = spec ?? null;
+  } catch { pagePreview.value = null; }
+}
+watch(pageRule, () => { if (pageForm.value) loadPagePreview(); });
+// The page went away under the form (a handover, a close): nothing to watch.
+watch(() => live.url, (u) => { if (isBlank(u)) pageForm.value = false; });
+async function addPage() {
+  if (!canPick.value.ok || addingPage.value) return;
+  addingPage.value = true;
+  pageError.value = null;
+  try {
+    const { monitor } = await api.createMonitor({
+      selector: PAGE_SELECTOR, label: pageLabel.value.trim() || 'Whole page', ruleText: pageRule.value,
+      url: live.url, tag: 'page', suiteId: project.value?.id ?? undefined,
+    });
+    live.upsertMonitor(monitor);
+    added.value = { label: monitor.label, path: pathOfUrl(monitor.url) };
+    pageForm.value = false;
+  } catch (e) {
+    if (e.entitlement) live.upgrade = { ...e.entitlement, of: 'monitor.add' };
+    else pageError.value = e.message;
+  } finally { addingPage.value = false; }
+}
+
 // ---------------------------------------------------------- row actions
 /** One shape for every row action: busy on the row, the error beside it. */
 async function act(id, fn) {
@@ -308,6 +397,25 @@ function checkNow(m) {
   urlBox.value = m.url;
   open();
 }
+
+// ------------------------------------------------------------ the cards
+const clausesOf = (m) => clauseChips(m.spec, llmMode.value);
+/**
+ * "Claude replaced the checks", for a few seconds after monitor.compiled
+ * lands on a card: the checks approved in the preview were the mock's, and a
+ * card that swapped them without a word would hide that. Derived from the
+ * store's timestamp against a clock that ticks while the page is open, so
+ * there is nothing to clean up per monitor.
+ */
+const FLASH_MS = 6000;
+const now = ref(Date.now());
+let ticker = null;
+onMounted(() => { ticker = setInterval(() => { now.value = Date.now(); }, 1000); });
+onBeforeUnmount(() => clearInterval(ticker));
+const justCompiled = (m) => {
+  const c = live.compiled[m.id];
+  return c && now.value - c.at < FLASH_MS ? c : null;
+};
 </script>
 
 <template>
@@ -325,7 +433,9 @@ function checkNow(m) {
 
   <div class="grid gap-5 px-6 py-6 xl:grid-cols-[minmax(0,1fr)_380px]">
     <!-- stage -------------------------------------------------------- -->
-    <div>
+    <!-- min-w-0: a grid item is otherwise as wide as its widest line, and the
+         address bar's one-line URL would push the whole column past a phone. -->
+    <div class="min-w-0">
       <AddressBar :url="live.url" :nav="live.currentNav" />
       <Stage ref="stage" :opening="opening" :mode="live.picking ? 'pick' : 'drive'" @cancel="cancelPick" />
 
@@ -340,7 +450,7 @@ function checkNow(m) {
         </select>
         <input v-model="urlBox" spellcheck="false" aria-label="URL to watch"
                placeholder="staging.acme.com/dashboard"
-               class="min-w-0 flex-1 rounded-full border border-hairline bg-panel px-4 py-2 text-[13.5px] outline-none focus:border-ink/25"
+               class="min-w-0 grow basis-40 rounded-full border border-hairline bg-panel px-4 py-2 text-[13.5px] outline-none focus:border-ink/25"
                @keyup.enter="open">
         <Btn :busy="!!opening" busy-label="Opening…" @click="open">Open</Btn>
       </div>
@@ -361,7 +471,8 @@ function checkNow(m) {
         </template>
         <template v-else>
           Point at the page above and scroll it with your wheel — clicks and keys go to the page you
-          are watching, never to this one. Press <b class="font-medium text-ink-2">Pick element</b> to choose what to watch.
+          are watching, never to this one. Press <b class="font-medium text-ink-2">Pick element</b> to choose what to watch,
+          or <b class="font-medium text-ink-2">Watch the whole page</b> for any change at all.
         </template>
       </p>
 
@@ -413,7 +524,7 @@ function checkNow(m) {
         <div v-else class="mt-4">
           <section v-for="inc in incidents" :key="inc.id" class="card mb-3 p-5" :class="inc.status === 'resolved' && 'opacity-75'">
             <div class="flex flex-wrap items-start gap-3">
-              <span class="mt-0.5 shrink-0 rounded-full px-2.5 py-1 text-[11.5px] font-medium" :class="incidentPill(inc).tone">
+              <span class="mt-0.5 shrink-0 rounded-full px-2.5 py-1 text-[11.5px] font-medium" :class="incidentPill(inc).tone" :title="incidentPill(inc).title">
                 {{ incidentPill(inc).label }}
               </span>
               <p class="min-w-0 grow text-[13.5px] font-medium">{{ inc.monitorLabel }}</p>
@@ -421,7 +532,7 @@ function checkNow(m) {
                 {{ clock(inc.openedAt) }}<template v-if="inc.resolvedAt"> → {{ clock(inc.resolvedAt) }}</template> · {{ when(inc.openedAt) }}
               </span>
             </div>
-            <p class="mt-1 truncate font-mono text-[11.5px] text-ink-3" :title="inc.selector">{{ inc.selector }}</p>
+            <p class="mt-1 truncate font-mono text-[11.5px] text-ink-3" :title="inc.selector">{{ selectorLine(inc.selector) }}</p>
             <p class="mt-1 text-[12.5px] italic text-ink-2">“{{ inc.ruleText }}”</p>
 
             <div v-for="x in inc.violations" :key="x.checkId" class="mt-2 rounded-lg border border-critical/25 bg-critical/5 px-3 py-2 text-[12.5px]">
@@ -434,6 +545,10 @@ function checkNow(m) {
             <div v-if="diffChips(inc.diff).length" class="mt-2 flex flex-wrap gap-1.5">
               <span v-for="d in diffChips(inc.diff)" :key="d" class="rounded-full border border-hairline px-2 py-0.5 font-mono text-[11.5px] text-ink-2">{{ d }}</span>
             </div>
+            <!-- The whole page: what was added, what went, what moved, what was reworded — the samples; the chips have the totals. -->
+            <ul v-if="pageLines(inc.diff).length" class="mt-2 space-y-0.5 font-mono text-[11.5px] text-ink-2" data-page-lines>
+              <li v-for="(l, i) in pageLines(inc.diff)" :key="i" class="truncate" :title="l">{{ l }}</li>
+            </ul>
 
             <div class="mt-3 grid gap-2 sm:grid-cols-2">
               <Shot caption="before (baseline)" :name="inc.before?.screenshot" :alt="`${inc.monitorLabel} before`" />
@@ -449,7 +564,14 @@ function checkNow(m) {
                       :class="chipTone(verdictSource(inc.verdict).tone)" :title="verdictSource(inc.verdict).title">
                   {{ verdictSource(inc.verdict).label }}
                 </span>
-                <span v-if="inc.verdict.violation === false" class="rounded-full border px-2 py-0.5 text-[11.5px]" :class="chipTone('warn')">
+                <!-- Judged fine on a judged clause: the judge closed it and the
+                     element as it is now became the baseline. Judged fine on a
+                     hard check, the incident stays open — the number still fails. -->
+                <span v-if="inc.resolvedBy === 'judge'" class="rounded-full border px-2 py-0.5 text-[11.5px]" :class="chipTone('info')"
+                      title="Claude read the change and found the rule still holds — the monitor took the new state as its baseline">
+                  judged fine — new baseline
+                </span>
+                <span v-else-if="inc.verdict.violation === false" class="rounded-full border px-2 py-0.5 text-[11.5px]" :class="chipTone('warn')">
                   judge: false alarm
                 </span>
               </div>
@@ -498,6 +620,10 @@ function checkNow(m) {
             <span v-if="pickedText" class="font-normal text-ink-2">“{{ pickedText }}”</span>
           </p>
           <p class="mt-1 break-all font-mono text-[12px] text-ink-3" :title="live.picked.selector">{{ live.picked.selector }}</p>
+          <!-- Where it sits: its ancestors, outermost first. -->
+          <p v-if="live.picked.path?.length" class="mt-0.5 truncate text-[11.5px] text-ink-3" :title="live.picked.path.join(' › ')">
+            {{ live.picked.path.join(' › ') }}
+          </p>
           <p v-if="live.picked.readError" class="mt-2 rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-[12.5px] text-warn">
             The page would not let it be measured fully ({{ live.picked.readError }}). It can still be watched for being there.
           </p>
@@ -519,15 +645,30 @@ function checkNow(m) {
                       @keydown.ctrl.enter.prevent="addMonitor" @keydown.meta.enter.prevent="addMonitor"></textarea>
           </Field>
           <div class="mt-2 min-h-6">
-            <p class="text-[11.5px] text-ink-3">
-              Checks it compiles to<template v-if="previewing"> · compiling…</template>
-            </p>
+            <div class="flex items-center gap-2">
+              <p class="text-[11.5px] text-ink-3">
+                Checks it compiles to<template v-if="previewing"> · compiling…</template>
+              </p>
+              <!-- The mock reads the sentence as it is typed; Claude reads it on
+                   request, one call from the day's budget — and only where the
+                   runner has Claude at all. -->
+              <Btn v-if="llmMode === 'claude'" size="sm" variant="ghost" class="ml-auto" :busy="compiling" busy-label="Compiling…"
+                   :disabled="!rule.trim()" title="Ask Claude what this sentence means before saving — one call from the daily budget"
+                   @click="compileWithClaude">Compile with Claude</Btn>
+            </div>
             <div v-if="previewChips.length" class="mt-1 flex flex-wrap gap-1.5">
               <span v-for="c in previewChips" :key="c.text" class="rounded-full border px-2 py-0.5 text-[11.5px]" :class="chipTone('neutral')" :title="c.title">{{ c.text }}</span>
-              <span v-if="preview?.needsLlmJudgment" class="rounded-full border px-2 py-0.5 text-[11.5px]" :class="chipTone('warn')"
+              <span v-if="preview?.needsLlmJudgment && !previewClauses.length" class="rounded-full border px-2 py-0.5 text-[11.5px]" :class="chipTone('warn')"
                     :title="preview.judgmentHint ?? ''">needs judgment</span>
             </div>
             <p v-else-if="!previewing" class="mt-1 text-[11.5px] text-ink-3">Nothing yet — write what must stay true, or pick a suggestion.</p>
+            <!-- Every clause as written and what became of it, so a clause that
+                 quietly became nothing is seen before the monitor exists. -->
+            <div v-if="previewClauses.length" class="mt-1.5 flex flex-wrap items-center gap-1.5">
+              <span v-for="(c, i) in previewClauses" :key="i" class="rounded-full border px-2 py-0.5 text-[11.5px]" :class="chipTone(c.tone)" :title="c.title">{{ c.text }}</span>
+              <span class="text-[11px] text-ink-3" :title="preview.source === 'claude' ? 'Claude read this sentence' : 'The mock compiler’s rules read this sentence'">{{ previewSource }}</span>
+            </div>
+            <p v-if="compileError" class="mt-1.5 rounded-lg border border-warn/40 bg-warn/10 px-2.5 py-1.5 text-[11.5px] text-warn">{{ compileError }}</p>
           </div>
           <div v-if="suggestions.length" class="mt-2 flex flex-wrap gap-1.5">
             <button v-for="s in suggestions" :key="s" type="button"
@@ -540,12 +681,44 @@ function checkNow(m) {
           </div>
         </template>
 
+        <template v-else-if="pageForm">
+          <!-- The whole page: no element to name, every block on it watched.
+               The runner keeps the blocks; the card only gets their count. -->
+          <p class="eyebrow mt-3">The whole page</p>
+          <p class="mt-2 text-[13.5px] font-medium text-ink">
+            Every block on <span class="font-mono font-normal text-ink-2">{{ pathOfUrl(live.url) }}</span>
+          </p>
+          <p class="mt-1 text-[12.5px] leading-relaxed text-ink-2">
+            Every heading, paragraph, link, button, cell and box — where it sits and what it says. Whatever
+            changes on its own, a ticker or a clock, is learned while the monitor is made and never reported.
+          </p>
+          <Field label="Label" class="mt-4">
+            <input v-model="pageLabel" placeholder="Whole page">
+          </Field>
+          <Field label="What must stay true" class="mt-3" :error="pageError"
+                 hint="Runs every time this page is opened, and on every change while it is open.">
+            <select v-model="pageRule" data-page-rule>
+              <option v-for="r in PAGE_RULES" :key="r" :value="r">{{ r }}</option>
+            </select>
+          </Field>
+          <div v-if="pagePreview" class="mt-2 flex flex-wrap gap-1.5">
+            <span v-for="c in pagePreview.checks" :key="c.id" class="rounded-full border px-2 py-0.5 text-[11.5px]" :class="chipTone('neutral')" :title="c.message">{{ chipText(c) }}</span>
+          </div>
+          <div class="mt-3 flex gap-2">
+            <Btn :busy="addingPage" busy-label="Measuring…" :disabled="!canPick.ok" data-page-add @click="addPage">Watch the page</Btn>
+            <Btn variant="ghost" @click="pageForm = false">Cancel</Btn>
+          </div>
+        </template>
+
         <template v-else>
-          <div class="mt-3">
+          <div class="mt-3 flex flex-wrap gap-2">
             <Btn :busy="arming" busy-label="Starting…" :disabled="!canPick.ok" @click="startPick">Pick element</Btn>
+            <Btn variant="ghost" :disabled="!canPick.ok" data-page-watch
+                 title="Watch every heading, paragraph, link, button, cell and box on this page for any change"
+                 @click="openPageForm">Watch the whole page</Btn>
           </div>
           <p class="mt-2 text-[12.5px] text-ink-3">
-            {{ canPick.ok ? 'Hover the page above and click the element you want to watch.' : canPick.why }}
+            {{ canPick.ok ? 'Hover the page above and click the element you want to watch — or watch the whole page for any change.' : canPick.why }}
           </p>
           <p v-if="live.pickError" class="mt-2 rounded-lg border border-critical/25 bg-critical/5 px-3 py-2 text-[12.5px] text-critical">
             {{ live.pickError }}
@@ -556,6 +729,9 @@ function checkNow(m) {
           </p>
         </template>
       </section>
+
+      <!-- The monitored pages opened on a cadence, so a change is found while nobody is looking (schedules.js). -->
+      <SchedulePanel kind="sweep" title="Sweeps" class="mb-4" />
 
       <section class="card p-5">
         <div class="flex items-baseline gap-2">
@@ -580,15 +756,20 @@ function checkNow(m) {
               <span v-if="m.onPage === false" class="shrink-0 rounded-full border border-warn/40 bg-warn/10 px-2 py-0.5 text-[11.5px] text-warn">not on this page</span>
               <span class="shrink-0 rounded-full px-2 py-0.5 text-[11.5px] font-medium" :class="stateTone(m.state)">{{ m.state }}</span>
             </div>
-            <p class="mt-1 truncate font-mono text-[11.5px] text-ink-3" :title="m.selector">{{ m.selector }}</p>
+            <p class="mt-1 truncate font-mono text-[11.5px] text-ink-3" :title="m.selector">{{ selectorLine(m.selector) }}</p>
             <p class="mt-1 text-[12.5px] italic text-ink-2">“{{ m.ruleText }}”</p>
             <div class="mt-2 flex flex-wrap gap-1.5">
               <span v-for="c in specChips(m)" :key="c.text" class="rounded-full border px-2 py-0.5 text-[11.5px]" :class="chipTone(c.tone)" :title="c.title">{{ c.text }}</span>
+              <span v-if="justCompiled(m)" class="rounded-full border px-2 py-0.5 text-[11.5px]" :class="chipTone('info')" :title="justCompiled(m).summary ?? ''">Claude replaced the checks</span>
+            </div>
+            <div v-if="clausesOf(m).length" class="mt-1.5 flex flex-wrap gap-1.5">
+              <span v-for="(c, i) in clausesOf(m)" :key="i" class="rounded-full border px-2 py-0.5 text-[11.5px]" :class="chipTone(c.tone)" :title="c.title">{{ c.text }}</span>
             </div>
             <p class="mt-2 font-mono text-[11.5px] text-ink-3">{{ metricsLine(m.metrics) }}</p>
             <p class="mt-1 text-[11.5px] text-ink-3">
               created {{ when(m.createdAt) }}<template v-if="m.lastTickAt"> · checked {{ when(m.lastTickAt) }}</template>
               · {{ m.stats?.incidents ?? 0 }} incident{{ (m.stats?.incidents ?? 0) === 1 ? '' : 's' }}
+              <template v-if="m.stats?.judgeCalls > 0"> · judged {{ m.stats.judgeCalls }} time{{ m.stats.judgeCalls === 1 ? '' : 's' }}</template>
             </p>
             <!-- How often the script has actually run because the page was
                  opened — the answer to "did it check when the run went there?" -->

@@ -9,6 +9,7 @@ import HeroPanel from '@/components/HeroPanel.vue';
 import StatTile from '@/components/StatTile.vue';
 import StatusPill from '@/components/StatusPill.vue';
 import EmptyState from '@/components/EmptyState.vue';
+import SchedulePanel from '@/components/SchedulePanel.vue';
 
 const store = useSuites();
 const live = useLive();
@@ -49,7 +50,8 @@ watch(
   () => [live.monitors.length, live.incidents.length, live.openIncidents, live.monitors.map((m) => m.state).join()],
   () => loadWatching(suite.value?.id),
 );
-const openIssues = computed(() => watching.value?.incidents.filter((i) => i.status === 'open').length ?? 0);
+// Unresolved, not merely `open`: an incident Claude is still judging counts until it is settled.
+const openIssues = computed(() => watching.value?.incidents.filter((i) => i.status !== 'resolved').length ?? 0);
 const monitorNote = computed(() => {
   if (!watching.value) return '';
   if (!watching.value.monitors.length) return 'nothing watched yet';
@@ -101,6 +103,9 @@ async function allow() {
       <StatTile label="Pass rate" :value="rate" :note="runs ? `${runs.totals.week} runs this week` : ''" />
       <StatTile label="Monitors" :value="watching ? watching.monitors.length : '—'" :note="monitorNote" />
     </div>
+
+    <!-- What runs on its own: the suite on a cadence (schedules.js). -->
+    <SchedulePanel kind="suite" :suite-id="suite.id" class="mb-4" />
 
     <div class="grid gap-4 lg:grid-cols-2">
       <section class="card p-5">

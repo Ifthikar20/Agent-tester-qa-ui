@@ -47,8 +47,8 @@ const plan = computed(() => props.plan ?? session.org?.plan ?? 'current');
       Limits are enforced by the runner from the plan in your token, so nothing here can be
       talked around. An owner of the organisation can move it to a bigger plan.
     </p>
-    <div class="mt-3 flex gap-2">
-      <RouterLink to="/organisation" class="rounded-full bg-brand hover:bg-brand-deep px-4 py-2 text-[13px] font-medium text-white">
+    <div class="mt-3 flex flex-wrap gap-2">
+      <RouterLink to="/organisation" class="rounded-full bg-brand px-4 py-2 text-[13px] font-medium text-white hover:bg-brand-deep">
         See the plan and usage
       </RouterLink>
       <button class="rounded-full border border-hairline px-4 py-2 text-[13px]" @click="$emit('dismiss')">Dismiss</button>

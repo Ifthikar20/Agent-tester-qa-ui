@@ -24,12 +24,16 @@ import { toMermaid } from './diagram.js';
 import { Recorder } from './recorder.js';
 import { NavigationLog } from './navlog.js';
 import * as monitoring from './monitor.js';
+import * as schedules from './schedules.js';
+import { BrowserPool, PoolFull } from './pool.js';
+import * as notify from './notify.js';
 import { MonitorAgent } from './monitor-page.js';
 import { findApiKey, createResolver, createBudget, MODEL as MONITOR_MODEL } from './monitor-resolver.js';
 import { llmModeFrom, compactSnapshot, previewSpec } from './monitor-rules.js';
 import { redactWith } from './redact.js';
 import * as chat from './chat.js';
-import { findApiKey as findChatApiKey, createResolver as createChatResolver, chatModeFrom, MODEL as CHAT_MODEL } from './chat-resolver.js';
+import * as docsIndex from './docs-index.js';
+import { createResolver as createChatResolver, chatModeFrom, MODEL as CHAT_MODEL } from './chat-resolver.js';
 
 const require = createRequire(import.meta.url);
 const PORT = Number(process.env.PORT) || 3000;
@@ -105,26 +109,24 @@ const BLOCK_PRIVATE = process.env.GC_BLOCK_PRIVATE != null
 const HEADED = /^(1|true|yes|on)$/i.test(process.env.HEADED ?? '');
 
 /**
+ * ONE key for the two layers that may call a model — agentic monitoring
+ * (monitor-resolver.js) and the chat (chat-resolver.js) — read ONCE, here:
+ * the environment, else ANTHROPIC_API_KEY alone out of .env.local. Then it is
+ * taken out of the environment, once: Playwright starts the browser with this
+ * process's environment, and the browser is the part of the runner that
+ * renders pages other people choose. Each layer holds the key only inside its
+ * resolver; nothing prints it — every banner line says "key found" and where.
+ * scripts/check-keys.js proves both layers see it and the browser does not.
+ */
+const API_KEY = findApiKey({ env: process.env, root: fileURLToPath(new URL('./', import.meta.url)) });
+delete process.env.ANTHROPIC_API_KEY;
+/**
  * Agentic monitoring's mind (monitor-rules.js, monitor-resolver.js): Claude
  * when a key is here, the mock compiler and judge otherwise, and
  * GC_MONITOR_LLM to say so explicitly — a word the runner does not know stops
  * it here, never read as off.
- *
- * The key is found once (the environment, else ANTHROPIC_API_KEY alone out of
- * .env.local) and held only inside the resolver. It is then taken OUT of the
- * environment: Playwright starts the browser with this process's environment,
- * and the browser is the part of the runner that renders pages other people
- * choose. Nothing that prints ever sees the key, only where it came from.
  */
-/**
- * The chat's key (chat-resolver.js), read HERE — before monitoring, just
- * below, takes ANTHROPIC_API_KEY out of the environment — and only read: the
- * delete stays where it is, so the browser is started without the key as
- * before. Held inside the resolver alone; the banner says where it came from.
- */
-const CHAT_KEY = findChatApiKey({ env: process.env, root: fileURLToPath(new URL('./', import.meta.url)) });
-const MONITOR_KEY = findApiKey({ env: process.env, root: fileURLToPath(new URL('./', import.meta.url)) });
-delete process.env.ANTHROPIC_API_KEY;
+const MONITOR_KEY = API_KEY;
 const MONITOR_LLM = llmModeFrom({ env: process.env, haveKey: Boolean(MONITOR_KEY.key) });
 if (MONITOR_LLM.error) {
   console.error(`\n  ${MONITOR_LLM.error}\n`);
@@ -145,6 +147,7 @@ const monitorBudget = createBudget({ max: MONITOR_AI_PER_DAY });
  * off. The budget is the process's, in memory: a ceiling against a runaway
  * conversation, not billing.
  */
+const CHAT_KEY = API_KEY;
 const CHAT = chatModeFrom({ env: process.env, haveKey: Boolean(CHAT_KEY.key) });
 if (CHAT.error) {
   console.error(`\n  ${CHAT.error}\n`);
@@ -156,6 +159,15 @@ if (!Number.isInteger(CHAT_AI_PER_DAY) || CHAT_AI_PER_DAY < 0) {
   process.exit(1);
 }
 const chatResolver = CHAT.mode === 'claude' ? createChatResolver({ apiKey: CHAT_KEY.key }) : null;
+
+/**
+ * The documentation beside this file, cut into sections for the chat's `docs`
+ * tool (docs-index.js): read once here, never written. A checkout deployed
+ * without its markdown gets a chat that cannot answer questions about the
+ * product, and the banner says so. Read here, with the other boot-time reads, because
+ * the banner below names it before the chat is configured.
+ */
+const DOCS = docsIndex.load(fileURLToPath(new URL('./', import.meta.url)));
 const chatBudget = createBudget({ max: CHAT_AI_PER_DAY });
 
 /**
@@ -196,6 +208,10 @@ const homeUrl = () => chooseHome({
 let page = null;
 let recorder = null;
 let running = false;
+/** What runs with nobody at the console (schedules.js), up once the browser is. */
+let scheduler = null;
+/** Pooled contexts for that work (pool.js), one per organisation; made with the browser. */
+let pool = null;
 /**
  * The rest of the driven session, and why these are `let` rather than `const`.
  *
@@ -402,7 +418,7 @@ app.use('/app', (req, res, next) => {
  */
 app.get('/healthz', (_req, res) => {
   res.set('Cache-Control', 'no-store');
-  res.status(browserReady ? 200 : 503).json({ ok: browserReady, browser: browserReady, busy: running });
+  res.status(browserReady ? 200 : 503).json({ ok: browserReady, browser: browserReady, busy: running, pool: pool ? pool.stats() : null });
 });
 
 /**
@@ -529,32 +545,75 @@ const historyFor = (space, ent) => {
 };
 const historyOf = (req) => historyFor(req.space, req.ent);
 
-app.get('/api/runs', (req, res) => res.json(historyOf(req).summary(14, req.query.suite || null)));
-app.get('/api/defects', (req, res) => res.json(historyOf(req).defects(14)));
+/**
+ * The organisation's defects (defects.js), brought up to date with its
+ * history before they are read and pruned on the plan's schedule — closed
+ * ones, that is: an open defect is kept however old it is, because it is
+ * still true.
+ */
+const defectsFor = (space, ent) => {
+  const { defects } = space;
+  defects.sync(historyFor(space, ent).list());
+  defects.prune(ent.limit('history.retention_days'));
+  return defects;
+};
+const defectsOf = (req) => defectsFor(req.space, req.ent);
 
 /**
- * The defects as the chat's tools read them (chat-tools.js). This runner
- * derives them from history rather than numbering and filing them, so the
- * rows are the same shape with no id and no severity, `byId` is false — the
- * tool that reads one by number is not offered — and a run names no defect.
+ * The defects as the chat's tools read them (chat-tools.js): the store, with
+ * the two questions its routes answer out of history folded in — one status
+ * at a time, and the failed runs behind one number. `byId` says this runner
+ * numbers its defects, so the tool that reads one by number is offered.
  */
 const chatDefectsFor = (space, ent) => {
-  const rows = () => historyFor(space, ent).defects(14).defects.map((d) => ({
-    id: null, status: d.open ? 'open' : 'closed', severity: null, hits: d.hits, reopened: 0,
-    firstSeen: d.first, lastSeen: d.last, title: d.error, target: null,
-    cases: d.cases.map((c) => c.name), suites: d.suites.slice(),
-  }));
+  const defects = defectsFor(space, ent);
   return {
-    byId: false,
-    list: (status = 'open') => rows().filter((d) => status === 'all' || d.status === status),
-    totals: () => {
-      const all = rows();
-      const open = all.filter((d) => d.status === 'open').length;
-      return { all: all.length, open, reopened: 0, known_issue: 0, wont_fix: 0, closed: all.length - open, unassigned: open };
-    },
-    idFor: () => null,
+    byId: true,
+    list: (status = 'open') => defects.list().filter((d) => status === 'all' || d.status === status),
+    totals: () => defects.totals(),
+    get: (id) => defects.get(id),
+    idFor: (run) => defects.idFor(run),
+    runsOf: (id, limit = 5) => defects.runsOf(id, space.history.list(), limit),
   };
 };
+
+app.get('/api/runs', (req, res) => {
+  const summary = historyOf(req).summary(14, req.query.suite || null);
+  const defects = defectsOf(req);
+  // Each failed run names its defect, so a history table can link to the
+  // number. Copies: `latest` holds history's own entries, and a field set on
+  // one of those would be written into runs.json by the next run.
+  summary.latest = summary.latest.map((r) => ({ ...r, defect: defects.idFor(r) }));
+  res.json(summary);
+});
+
+app.get('/api/defects', (req, res) => {
+  const defects = defectsOf(req);
+  res.json({ defects: defects.list(), totals: defects.totals() });
+});
+
+/** One defect by any spelling of its number, with its activity and the failed runs history still holds. */
+app.get('/api/defects/:id', (req, res) => {
+  try {
+    const defects = defectsOf(req);
+    const defect = defects.get(req.params.id);
+    res.json({ ok: true, defect, runs: defects.runsOf(defect.id, req.space.history.list()) });
+  } catch (err) { fail(res, err, err.name === 'NoSuchDefect' ? 404 : 400); }
+});
+
+/**
+ * Triage: assign, overrule the severity, park as a known issue or won't-fix.
+ * An owner's or admin's, like the other changes to what the organisation
+ * keeps (docs/AUTH.md §10) — but not step-up, since none of it reaches the
+ * browser. Who made the change is read from the token and nowhere else.
+ */
+app.patch('/api/defects/:id', (req, res) => {
+  try {
+    tenancy.requireManager(req.user);
+    const by = { sub: req.user?.sub ?? null, email: req.user?.email ?? null };
+    sendOk(res, { defect: defectsOf(req).triage(req.params.id, req.body, by) });
+  } catch (err) { fail(res, err, err.name === 'NoSuchDefect' ? 404 : 400); }
+});
 
 /**
  * Pictures for the hero panels, if anyone has put any there.
@@ -950,15 +1009,22 @@ app.post('/api/suites/:id/run', async (req, res) => {
  * refused before case one, not discovered halfway. And the plan before the
  * lock: a run the plan refuses never takes the browser.
  */
-async function runCasesOf({ suite, wanted, pace = PACE, space, ent }) {
+async function runCasesOf({ suite, wanted, pace = PACE, space, ent, scheduled = false, session = null }) {
   if (!wanted.length) throw new Error('This suite has no cases to run');
   ent.check('runs.per_day', space.history.today(), wanted.length);
-  await take(space.org);
-  if (running) throw Object.assign(new Error('A run is in progress'), { status: 409 });
+  // On a pooled session (a schedule's) the console's lock is not taken: the
+  // suite runs on the organisation's own page, beside whatever the console does.
+  if (session) {
+    if (session.running) throw Object.assign(new Error('A run is in progress'), { status: 409 });
+  } else {
+    await take(space.org);
+    if (running) throw Object.assign(new Error('A run is in progress'), { status: 409 });
+  }
+  const say = session ? session.emit : emit;
 
   const checkFlow = checkFlowFor(space);
 
-  emit({ t: 'suite.start', suite: suite.name, cases: wanted.length });
+  say({ t: 'suite.start', suite: suite.name, cases: wanted.length });
   const outcomes = [];
   for (const c of wanted) {
     let plan;
@@ -967,21 +1033,70 @@ async function runCasesOf({ suite, wanted, pace = PACE, space, ent }) {
     } catch (err) {
       // An unparseable case is a failed case, not a dead suite.
       outcomes.push({ case: c.id, name: c.name, ok: false, error: err.message });
-      emit({ t: 'log', level: 'error', msg: `${c.name}: ${err.message}` });
+      say({ t: 'log', level: 'error', msg: `${c.name}: ${err.message}` });
       continue;
     }
     plan.suite = `${suite.name} · ${c.name}`;
-    emit({ t: 'diagram', kind: 'plan', mermaid: toMermaid(plan) });
+    say({ t: 'diagram', kind: 'plan', mermaid: toMermaid(plan) });
     // Express 4 does not catch a rejection from an async handler, so an
     // unexpected throw here would take the process with it rather than failing
     // one case. A suite run survives a bad case.
-    const r = await run(plan, { suiteId: suite.id, caseId: c.id, caseName: c.name, pace, space, ent })
+    const r = await run(plan, { suiteId: suite.id, caseId: c.id, caseName: c.name, pace, space, ent, scheduled, session })
       .catch((err) => ({ ok: false, passed: 0, total: 0, error: err.message }));
     outcomes.push({ case: c.id, name: c.name, ...r });
   }
   const passed = outcomes.filter((o) => o.ok).length;
-  emit({ t: 'suite.end', suite: suite.name, passed, total: outcomes.length });
+  say({ t: 'suite.end', suite: suite.name, passed, total: outcomes.length });
   return { suite: suite.id, passed, total: outcomes.length, outcomes };
+}
+
+/**
+ * What a schedule does when its time comes (schedules.js, Scheduler.fire):
+ * the run the Run suite button makes, or a sweep of every page this
+ * organisation has a monitor on — opened one after another so the monitors
+ * arm and measure, the way Check now opens one. Under the plan the schedule
+ * was saved with. A Deferred means the browser is held; the engine tries
+ * again next tick, and says so if the slot passes.
+ */
+async function fireSchedule(org, s) {
+  const space = tenancy.workspace(org);
+  const claims = s.claims ?? null;
+  if (claims && tenancy.stale(claims)) return { ok: false, error: 'the plan changed since this schedule was saved — save it again' };
+  const ent = tenancy.entitlements(claims);
+  // The organisation's own pooled page (backgroundSession): a schedule never
+  // takes the console's, so it runs beside whatever a person is doing there.
+  const session = await backgroundSession(org);
+  if (session.running) throw new schedules.Deferred("this organisation's scheduled work is still running");
+  if (s.kind === 'suite') {
+    const suite = space.suites.get(s.suiteId);
+    if (!suite.cases.length) return { ok: false, error: 'the suite has no cases to run' };
+    const origin = originOf(suite);
+    if (!space.origins.has(origin)) return { ok: false, error: `${origin} is not allowed — allow it under Origins & vault` };
+    const r = await runCasesOf({ suite, wanted: suite.cases, space, ent, scheduled: true, session });
+    return { ok: r.passed === r.total, passed: r.passed, total: r.total };
+  }
+  const urls = [...new Set(space.monitors.list().filter((m) => m.state !== 'paused' && m.url).map((m) => m.url))];
+  if (!urls.length) return { ok: true, pages: 0, of: 0, note: 'nothing to sweep: no monitors' };
+  let opened = 0;
+  const errors = [];
+  session.running = true;
+  try {
+    for (const url of urls) {
+      let origin;
+      try { origin = new URL(url).origin; } catch { errors.push(`${url}: not an address`); continue; }
+      if (!space.origins.has(origin)) { errors.push(`${url}: ${origin} is not allowed`); continue; }
+      try {
+        await OPS.goto(session.page, { url }, { cursor: session.cursor, emit: session.emit, nav: session.nav, origins: space.origins });
+        opened++;
+      } catch (err) { errors.push(`${url}: ${String(err.message).split('\n')[0]}`); continue; }
+      // The document arms its monitors on load; each gets this long to be measured (monitor.js ARM_GRACE_MS).
+      await sleep(monitoring.ARM_GRACE_MS + 1500);
+      pool?.touch(org);
+    }
+  } finally { session.running = false; }
+  session.emit({ t: 'log', level: 'info', msg: `swept ${opened} of ${urls.length} monitored page${urls.length === 1 ? '' : 's'}` });
+  const open = space.monitors.listIncidents('open').length;
+  return { ok: errors.length === 0, pages: opened, of: urls.length, openIncidents: open, ...(errors.length ? { error: errors.slice(0, 3).join('; ') } : {}) };
 }
 
 /**
@@ -1155,6 +1270,36 @@ app.post('/api/monitors/preview', (req, res) => {
   if (!spec) return res.status(400).json({ ok: false, error: 'ruleText is required' });
   res.json({ ok: true, spec });
 });
+/**
+ * The same sentence, compiled by Claude on request — one call, from the
+ * daily budget — so a person sees what the model makes of it BEFORE saving,
+ * where the preview above is the mock's instant reading. Nothing is kept.
+ * The element's markup excerpt is read off the open page when the picked
+ * element is on it, as it would be for the monitor itself. The mock's spec
+ * rides along with a refusal, so the panel always has something to show.
+ */
+app.post('/api/monitors/compile', async (req, res) => {
+  const body = req.body ?? {};
+  const mock = previewSpec(body);
+  if (!mock) return res.status(400).json({ ok: false, error: 'ruleText is required' });
+  if (monitoring.llmState().mode !== 'claude' || !monitorResolver) {
+    return res.status(409).json({ ok: false, error: 'no_model', message: 'This runner compiles rules with the mock compiler only — set ANTHROPIC_API_KEY for Claude', spec: mock });
+  }
+  if (!monitorBudget.take()) return res.status(429).json({ ok: false, error: 'budget', message: 'The daily AI budget is spent; the rules compiled it instead', spec: mock });
+  const engine = monitorsOf(req);
+  const selector = String(body.selector ?? '').slice(0, monitoring.SELECTOR_MAX);
+  const onPage = driver.sees(req.space.org) && monitorAgent?.alive() && !!currentUrl();
+  const excerpt = onPage && selector ? engine.cleanExcerpt(await monitorAgent.excerpt({ selector, fingerprint: body.fingerprint ?? null }).catch(() => null)) : null;
+  const base = body.baseline && typeof body.baseline === 'object' && !Array.isArray(body.baseline) ? engine.cleanSnapshot({ ...body.baseline }) : null;
+  const element = {
+    tag: String(body.tag ?? base?.tag ?? '').slice(0, 40), selector,
+    label: engine.redact(String(body.label ?? '')).slice(0, monitoring.LABEL_MAX),
+    textPreview: String(base?.text ?? '').slice(0, 120), excerpt,
+  };
+  const spec = await monitorResolver.compile({ ruleText: String(body.ruleText).slice(0, monitoring.RULE_MAX), element, baseline: base });
+  if (!spec) return res.status(503).json({ ok: false, error: 'unavailable', message: `Claude did not answer: ${monitorResolver.unavailable ?? 'unavailable'}`, spec: mock });
+  res.json({ ok: true, spec });
+});
 app.post('/api/monitors', async (req, res) => {
   if (!pageIsOurs(req, res)) return;
   try {
@@ -1185,6 +1330,75 @@ app.post('/api/monitors/:id/resume', async (req, res) => {
   try { const engine = monitorsOf(req); const m = await engine.resume(req.params.id); sendOk(res, { monitor: engine.publicMonitor(m) }); }
   catch (err) { fail(res, err); }
 });
+// ---- notifications: where an incident, a failed run or a defect is told (notify.js) ---------
+app.get('/api/notify', (req, res) => {
+  sendOk(res, { channels: req.space.notify.list(), events: notify.EVENTS, kinds: notify.KINDS, smtp: notify.smtpConfigured() });
+});
+app.post('/api/notify/channels', (req, res) => {
+  try { tenancy.requireManager(req.user); } catch (err) { return fail(res, err); }
+  const b = req.body ?? {};
+  try { sendOk(res, { channel: req.space.notify.create({ kind: b.kind, name: b.name, url: b.url, to: b.to, secret: b.secret, events: b.events }) }); }
+  catch (err) { fail(res, err); }
+});
+app.patch('/api/notify/channels/:id', (req, res) => {
+  try { tenancy.requireManager(req.user); } catch (err) { return fail(res, err); }
+  const b = req.body ?? {};
+  try { sendOk(res, { channel: req.space.notify.update(req.params.id, { name: b.name, events: b.events, enabled: b.enabled, url: b.url, to: b.to, secret: b.secret }) }); }
+  catch (err) { fail(res, err); }
+});
+app.delete('/api/notify/channels/:id', (req, res) => {
+  try { tenancy.requireManager(req.user); } catch (err) { return fail(res, err); }
+  try { sendOk(res, { channel: req.space.notify.remove(req.params.id) }); }
+  catch (err) { fail(res, err); }
+});
+app.post('/api/notify/channels/:id/test', async (req, res) => {
+  try { tenancy.requireManager(req.user); } catch (err) { return fail(res, err); }
+  try { sendOk(res, { result: await notify.test(req.space.org, req.params.id) }); }
+  catch (err) { fail(res, err); }
+});
+
+// ---- schedules: suites run and monitored pages swept on a cadence (schedules.js) ------------
+app.get('/api/schedules', (req, res) => {
+  sendOk(res, { schedules: req.space.schedules.list(req.query.suite ? String(req.query.suite) : null) });
+});
+app.post('/api/schedules', (req, res) => {
+  const space = req.space;
+  const b = req.body ?? {};
+  try {
+    if (b.kind === 'suite') space.suites.get(String(b.suiteId ?? ''));   // this organisation's, or "no suite"
+    req.ent.check('schedules.max', space.schedules.list().length);
+    const schedule = space.schedules.create({ kind: b.kind, suiteId: b.suiteId, cron: b.cron, name: b.name, claims: req.user ?? null, by: req.user?.email ?? null });
+    scheduler?.watch(space.org);
+    emitTo(space.org, { t: 'schedules.changed' });
+    sendOk(res, { schedule });
+  } catch (err) { fail(res, err, err instanceof NoSuchSuite ? 404 : 400); }
+});
+app.patch('/api/schedules/:id', (req, res) => {
+  const b = req.body ?? {};
+  try {
+    const schedule = req.space.schedules.update(req.params.id, { cron: b.cron, enabled: b.enabled, name: b.name });
+    emitTo(req.space.org, { t: 'schedules.changed' });
+    sendOk(res, { schedule });
+  } catch (err) { fail(res, err, err instanceof schedules.NoSuchSchedule ? 404 : 400); }
+});
+app.delete('/api/schedules/:id', (req, res) => {
+  try {
+    const schedule = req.space.schedules.remove(req.params.id);
+    emitTo(req.space.org, { t: 'schedules.changed' });
+    sendOk(res, { schedule });
+  } catch (err) { fail(res, err, err instanceof schedules.NoSuchSchedule ? 404 : 400); }
+});
+app.post('/api/schedules/:id/run', (req, res) => {
+  const space = req.space;
+  let s;
+  try { s = space.schedules.get(req.params.id); } catch (err) { return fail(res, err, 404); }
+  if (!scheduler) return fail(res, new Error('the scheduler is not up yet'), 503);
+  if (scheduler.firing) return fail(res, new Error('a schedule is already firing — try again when it has ended'), 409);
+  // A fire may take minutes: answered now, reported on the socket (schedule.fired) when it ends.
+  scheduler.runNow(space.org, s.id).catch((err) => emitTo(space.org, { t: 'log', level: 'error', msg: `schedule "${s.name}": ${err.message}` }));
+  res.status(202).json({ ok: true, firing: true, id: s.id });
+});
+
 app.get('/api/incidents', (req, res) => {
   const status = ['open', 'resolved'].includes(req.query.status) ? req.query.status : null;
   try { res.json({ ok: true, incidents: monitorsOf(req).listIncidents(status, projectOf(req)) }); }
@@ -1194,7 +1408,7 @@ app.get('/api/incidents', (req, res) => {
 app.post('/api/incidents/:id/resolve', async (req, res) => {
   try {
     const engine = monitorsOf(req);
-    const inc = await engine.resolve(req.params.id, 'manual');
+    const inc = await engine.resolve(req.params.id, 'manual', req.user ? { sub: req.user.sub ?? null, email: req.user.email ?? null } : null);
     const m = engine.monitors.get(inc.monitorId);
     sendOk(res, { incident: inc, monitor: m ? engine.publicMonitor(m) : null });
   } catch (err) { fail(res, err); }
@@ -1245,6 +1459,16 @@ app.post('/api/chat/turns', (req, res) => {
     const turn = chat.turn({ ...(req.body ?? {}), space: req.space, ent: req.ent, by: req.user?.sub ?? LOCAL });
     res.status(202).json({ ok: true, conversationId: turn.conversationId, turnId: turn.id });
   } catch (err) { fail(res, err); }
+});
+/**
+ * Stop, so the UI's Stop button has an answer here too. What it ends — a batch
+ * of drafted tests, between attempts (chat-plan.js) — needs the deployed
+ * runner's plan actions (readPage, planPage, runDrafts), which this copy does
+ * not carry: the `plan_page_tests` tool does not exist here, and the answer
+ * is the turn asked to stop, or null when nothing is running.
+ */
+app.post('/api/chat/stop', (req, res) => {
+  try { sendOk(res, { stopping: chat.stop(req.space) }); } catch (err) { fail(res, err); }
 });
 /**
  * Redirect shapes worth testing, for the bundled demo.
@@ -1406,6 +1630,7 @@ console.log(`\n  ghostclick  ->  http://localhost:${PORT}` +
             `\n  monitoring  ->  ${MONITOR_LLM.mode === 'claude'
               ? `Claude (${MONITOR_MODEL}) compiles rules and judges incidents — key from ${MONITOR_KEY.source}, at most ${monitorBudget.max} calls a day (GC_MONITOR_AI_MAX_PER_DAY)`
               : `the mock compiler and judge${MONITOR_KEY.key ? ' (GC_MONITOR_LLM=mock)' : ' — set ANTHROPIC_API_KEY for Claude'}`}` +
+            `\n  docs        ->  ${DOCS.sections.length ? `${DOCS.sections.length} sections of ${DOCS.files.join(', ')}, for the chat` : 'no markdown beside server.js — the chat cannot answer questions about the product'}` +
             `\n  chat        ->  ${CHAT.mode === 'claude'
               ? `Claude (${CHAT_MODEL}) answers from the organisation's own stores and runs its saved cases — key from ${CHAT_KEY.source}, at most ${chatBudget.max} calls a day (GC_CHAT_AI_MAX_PER_DAY)`
               : `the mock mind — rules over the same tools${CHAT_KEY.key ? ' (GC_CHAT=mock)' : ' — set ANTHROPIC_API_KEY for Claude'}`}` +
@@ -1432,6 +1657,56 @@ const browser = await chromium.launch({
   executablePath: process.env.CHROMIUM_PATH || undefined,
   args: ['--disable-dev-shm-usage', '--force-color-profile=srgb'],
 });
+
+// What runs with nobody at the console (schedules.js) leases the organisation's
+// own context from this pool (pool.js), so it runs beside a person driving the
+// console's page, never in their place. The console's page stays the singleton.
+pool = new BrowserPool(browser, { max: Math.max(1, Number(process.env.GC_POOL_MAX) || 2), idleMs: 5 * 60_000, viewport: VIEW });
+
+/**
+ * A pooled session for an organisation's scheduled work: its own context and
+ * page, wired with what a run needs — the reach rule, a cursor, a navigation
+ * log, and a monitoring agent reporting into the organisation's engine — and
+ * nothing a person needs: no screencast, no recorder, no target panel. Made
+ * once per lease and kept on it; the lease closes itself after five idle
+ * minutes (pool.js) and the session goes with it. Its events reach the
+ * organisation's sockets marked `background`, so the console does not draw
+ * them as its own run. A full pool is a Deferred: the schedule waits.
+ */
+async function backgroundSession(org) {
+  const space = tenancy.workspace(org);
+  let lease;
+  try { lease = await pool.acquire(org); }
+  catch (err) { if (err instanceof PoolFull) throw new schedules.Deferred(err.message); throw err; }
+  if (lease.session) { pool.touch(org); return lease.session; }
+  const say = (ev) => emitTo(org, { ...ev, background: true });
+  const { page: pg, context } = lease;
+  if (BLOCK_PRIVATE) {
+    await context.route('**/*', async (route) => {
+      const url = route.request().url();
+      const why = await blocked(url);
+      if (!why) return route.continue();
+      say({ t: 'log', level: 'error', msg: `blocked ${url} — ${why}` });
+      return route.abort('blockedbyclient');
+    });
+  }
+  const bgCdp = await context.newCDPSession(pg);
+  const bgCursor = new VirtualCursor(bgCdp, () => {});
+  const bgNav = new NavigationLog(pg, { onNavigation: (n) => say({ t: 'nav', ...n }) });
+  bgNav.attach();
+  const engine = space.monitors;
+  const bgAgent = new MonitorAgent(pg, {
+    owner: org,
+    listFor: (href) => engine.monitorsForPage(href),
+    onReport: (r) => engine.ingest(r),
+    onVisit: (href, list) => { if (list.length) engine.visited(href, list.map((m) => m.id)); },
+    onError: (msg) => say({ t: 'log', level: 'error', msg }),
+  });
+  await bgAgent.attach();
+  const session = { org, page: pg, cursor: bgCursor, nav: bgNav, agent: bgAgent, emit: say, running: false, background: true };
+  lease.session = session;
+  return session;
+}
 
 /**
  * Broadcast is per organisation (docs/AUTH.md §9.6 [websocket-3]).
@@ -1743,6 +2018,8 @@ async function newSession() {
         snapshot,
         label: engine.redact(String(info.label ?? '')).slice(0, monitoring.LABEL_MAX),
         url: info.url ?? currentUrl(),
+        // Where it sits — its ancestors, outermost first (core.js pathOf) — so the panel can say.
+        path: Array.isArray(info.path) ? info.path.slice(0, 12).map((s) => engine.redact(String(s)).slice(0, 80)) : [],
         // What the page could not read about it, if anything (picker.js select).
         readError: info.readError ? String(info.readError).slice(0, 200) : null,
       });
@@ -1838,8 +2115,28 @@ async function resetSession() {
  * run or a recording holds it otherwise, and a screenshot must not scroll
  * under them.
  */
+notify.configure({
+  log: console,
+  // The same reach rule a page lives under: a channel may not point inside the container's network on a gated runner.
+  mayReach: BLOCK_PRIVATE ? (url) => blocked(url) : null,
+  redactFor: (org) => (text) => tenancy.workspace(org).monitors.redact(text),
+});
 monitoring.configure({
   emitTo,
+  notify: (org, event, data) => { notify.send(org, event, data); },
+  // An incident is a defect too (defects.js incident): filed as it opens,
+  // closed as it resolves, under the same numbers as a failed run's — and
+  // said in the log and on the sockets the way a run's filing is. The
+  // incident's own notification carries the number, so none is sent here.
+  defects: (org, event, data) => {
+    const space = tenancy.workspace(org);
+    let suiteName = null;
+    if (data.monitor?.suiteId) { try { suiteName = space.suites.get(String(data.monitor.suiteId))?.name ?? null; } catch { suiteName = null; } }
+    const { id, changes } = space.defects.incident(event, { ...data, suiteName });
+    for (const ch of changes) emitTo(org, { t: 'log', level: ch.kind === 'closed' ? 'info' : 'warn', msg: `${ch.id} ${ch.kind}: ${ch.title}` });
+    if (changes.length) emitTo(org, { t: 'defects.changed', changes });
+    return id;
+  },
   log: console,
   llm: { mode: MONITOR_LLM.mode, model: MONITOR_LLM.mode === 'claude' ? MONITOR_MODEL : null, key: { have: Boolean(MONITOR_KEY.key), from: MONITOR_KEY.source } },
   resolver: monitorResolver,
@@ -1868,6 +2165,8 @@ chat.configure({
     runPlan: run,
     scanPage: scanPageOf,
     quickstart: quickstartOf,
+    // The documentation: a tool only where the checkout has any.
+    docs: () => (DOCS.sections.length ? DOCS : null),
   },
 });
 
@@ -1905,7 +2204,12 @@ const vaultFor = (space, ent) => ({
 async function run(plan, meta = {}) {
   const space = meta.space ?? local;
   const ent = meta.ent ?? tenancy.entitlements(null);
-  if (running) {
+  // A pooled session (backgroundSession) runs the plan on its own page, so a
+  // schedule never takes the console's; without one, this is the console's run.
+  const bg = meta.session ?? null;
+  const pg = bg ? bg.page : page;
+  const say = bg ? bg.emit : emit;
+  if (bg ? bg.running : running) {
     // An error, not a warning. A refused run does nothing visible, so if this
     // is quiet the only symptom is a button that appears not to work.
     emitTo(space.org, { t: 'log', level: 'error', msg: 'A run is already in progress — wait for it to finish' });
@@ -1914,7 +2218,9 @@ async function run(plan, meta = {}) {
   // A plan with no `goto` of its own is only allowed to run on a page this
   // organisation already holds — checked BEFORE the lock, so a refused plan
   // does not take the browser away from whoever has it.
-  const stray = unanchored(plan, space);
+  const stray = bg
+    ? (plan.steps[0]?.op === 'goto' ? null : { error: 'a scheduled run opens a page of its own — it starts with a goto' })
+    : unanchored(plan, space);
   if (stray) {
     emitTo(space.org, { t: 'log', level: 'error', msg: stray.error });
     if (stray.origin) emitTo(space.org, { t: 'needs.origin', origin: stray.origin, url: stray.url });
@@ -1925,17 +2231,17 @@ async function run(plan, meta = {}) {
   // organisation that asked, in the shape its UI acts on.
   try {
     ent.check('runs.per_day', space.history.today());
-    await take(space.org);
+    if (!bg) await take(space.org);
   } catch (err) {
     emitTo(space.org, { t: 'refused', of: 'run', ...refusal(err) });
     emitTo(space.org, { t: 'log', level: 'error', msg: err.message });
     return { ok: false, passed: 0, total: 0, error: err.message };
   }
-  running = true;
-  const wasRecording = recorder.recording;
-  recorder.recording = false;
+  if (bg) bg.running = true; else running = true;
+  const wasRecording = bg ? false : recorder.recording;
+  if (!bg) recorder.recording = false;
   // A run's clicks must reach the page: an active pick would swallow them.
-  if (monitorAgent?.picking) {
+  if (!bg && monitorAgent?.picking) {
     await monitorAgent.stopPicker().catch(() => null);
     if (monitorAgent.owner) emitTo(monitorAgent.owner, { t: 'monitor.pick', on: false });
   }
@@ -1944,10 +2250,10 @@ async function run(plan, meta = {}) {
   // A run can be told how much of itself to perform. Unset means this server's
   // default, so nothing that does not ask is affected.
   const ctx = {
-    cursor, emit, nav, onNavigate: publishTargets, pace: paceOf(meta.pace, PACE),
+    cursor: bg ? bg.cursor : cursor, emit: say, nav: bg ? bg.nav : nav, onNavigate: bg ? null : publishTargets, pace: paceOf(meta.pace, PACE),
     origins: space.origins, vault: vaultFor(space, ent),
   };
-  emit({ t: 'run.start', total: plan.steps.length, suite: plan.suite, suiteId: meta.suiteId, caseId: meta.caseId, caseName: meta.caseName });
+  say({ t: 'run.start', total: plan.steps.length, suite: plan.suite, suiteId: meta.suiteId, caseId: meta.caseId, caseName: meta.caseName, ...(meta.scheduled ? { scheduled: true } : {}) });
 
   // Everything from here to the finally must be able to throw without wedging
   // the executor. It used to clear the lock on the happy path only, so a
@@ -1957,17 +2263,17 @@ async function run(plan, meta = {}) {
   // what that looks like from the outside.
   try {
     for (const [i, step] of plan.steps.entries()) {
-      emit({ t: 'step.start', i, step });
+      say({ t: 'step.start', i, step });
       const t0 = Date.now();
       try {
-        await OPS[step.op](page, step, ctx);
+        await OPS[step.op](pg, step, ctx);
         results.push({ i, ok: true, ms: Date.now() - t0 });
-        emit({ t: 'step.pass', i, ms: Date.now() - t0 });
+        say({ t: 'step.pass', i, ms: Date.now() - t0 });
       } catch (err) {
         results.push({ i, ok: false, ms: Date.now() - t0, error: err.message });
-        emit({ t: 'step.fail', i, ms: Date.now() - t0, error: err.message });
+        say({ t: 'step.fail', i, ms: Date.now() - t0, error: err.message });
         // A step the plan refused is a plan refusal, not a broken page.
-        if (err instanceof tenancy.EntitlementError) emit({ t: 'refused', of: 'run', ...refusal(err) });
+        if (err instanceof tenancy.EntitlementError) say({ t: 'refused', of: 'run', ...refusal(err) });
         break;
       }
       await sleep(120);
@@ -1983,17 +2289,41 @@ async function run(plan, meta = {}) {
       url: plan.steps.find((s) => s.op === 'goto')?.url ?? '',
       ms: results.reduce((a, r) => a + (r.ms ?? 0), 0),
       results,
+      steps: plan.steps,
+      scheduled: meta.scheduled === true,
     });
     space.history.prune(ent.limit('history.retention_days'));
+    // What this run filed, closed or reopened (defects.js), said in the log as
+    // it happens: a number that turns up on the Defects page with no word
+    // about where it came from reads as somebody else's. Like the report
+    // below, failing at it must not cost the run its verdict.
+    let defect = null;
+    try {
+      const changes = space.defects.sync(space.history.list());
+      for (const c of changes) {
+        say({ t: 'log', level: c.kind === 'closed' ? 'info' : 'warn', msg: `${c.id} ${c.kind}: ${c.title}` });
+        // A defect filed or reopened is told (notify.js): queued, never waited for.
+        if (c.kind === 'filed' || c.kind === 'reopened') notify.send(space.org, 'defect', { kind: c.kind, id: c.id, title: c.title, suite: plan.suite });
+      }
+      // And the Defects page, open in a tab somewhere, reloads its list.
+      if (changes.length) emitTo(space.org, { t: 'defects.changed', changes });
+      defect = space.defects.idFor(entry);
+    } catch (err) {
+      say({ t: 'log', level: 'error', msg: `could not file the defect: ${err.message}` });
+    }
+    // And a failed run, with the step it stopped on and the defect it went under.
+    if (!ok) {
+      notify.send(space.org, 'run_failed', { suite: plan.suite, caseName: meta.caseName ?? null, passed, total: results.length, error: entry.error, step: entry.step, doing: entry.target ?? null, defect, scheduled: meta.scheduled === true, page: entry.url, url: entry.url });
+    }
     // Same function, same IR — with outcomes folded in, the plan diagram
     // becomes the run report. Drawing it is a nicety; failing to draw it must
     // not cost you the run's verdict.
     try {
-      emit({ t: 'diagram', kind: 'report', mermaid: toMermaid(plan, { results }) });
+      say({ t: 'diagram', kind: 'report', mermaid: toMermaid(plan, { results }) });
     } catch (err) {
-      emit({ t: 'log', level: 'error', msg: `could not draw the report: ${err.message}` });
+      say({ t: 'log', level: 'error', msg: `could not draw the report: ${err.message}` });
     }
-    await publishTargets();
+    if (!bg) await publishTargets();
     // The failing step, so a caller can say where a run stopped without
     // reading the history back (the chat does). This history keeps no target.
     return { ok, passed, total: results.length, error: entry.error, step: entry.step, target: entry.target ?? null };
@@ -2001,11 +2331,9 @@ async function run(plan, meta = {}) {
     // Clear the lock BEFORE announcing the end. run.end means "you may start
     // another run"; emitting it while still locked makes a caller that runs
     // back-to-back scripts hang on a silently refused second run.
-    running = false;
-    recorder.recording = wasRecording;
-    driver.touch(space.org);
-    armRelease();
-    emit({ t: 'run.end', ok: results.every((r) => r.ok) && results.length > 0, suiteId: meta.suiteId, caseId: meta.caseId, caseName: meta.caseName });
+    if (bg) bg.running = false;
+    else { running = false; recorder.recording = wasRecording; driver.touch(space.org); armRelease(); }
+    say({ t: 'run.end', ok: results.every((r) => r.ok) && results.length > 0, suiteId: meta.suiteId, caseId: meta.caseId, caseName: meta.caseName });
   }
 }
 
@@ -2354,5 +2682,9 @@ process.on('unhandledRejection', (err) => {
   try { emit({ t: 'log', level: 'error', msg: `internal error: ${err?.message ?? err}` }); } catch {}
 });
 
-process.on('SIGINT', async () => { monitoring.flushAll(); await browser.close(); process.exit(0); });
-process.on('SIGTERM', async () => { monitoring.flushAll(); await browser.close(); process.exit(0); });
+// ---- schedules: what runs with nobody at the console (schedules.js) -------------------------
+scheduler = new schedules.Scheduler({ fire: fireSchedule, emit: emitTo, log: console }).start();
+console.log(`  schedules   ${scheduler.known.size ? [...scheduler.known].map((o) => `${o}: ${tenancy.workspace(o).schedules.list().length}`).join(', ') : 'none yet'}`);
+
+process.on('SIGINT', async () => { scheduler?.stop(); monitoring.flushAll(); await notify.drain(); await pool?.drain().catch(() => {}); await browser.close(); process.exit(0); });
+process.on('SIGTERM', async () => { scheduler?.stop(); monitoring.flushAll(); await notify.drain(); await pool?.drain().catch(() => {}); await browser.close(); process.exit(0); });

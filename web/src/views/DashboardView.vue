@@ -3,7 +3,8 @@ import { onMounted, ref } from 'vue';
 import { api } from '@/api';
 import HeroPanel from '@/components/HeroPanel.vue';
 import TopBar from '@/components/TopBar.vue';
-import RunsChart from '@/components/RunsChart.vue';
+import { runsSpec } from '@/charts';
+import Chart from '@/components/Chart.vue';
 import StatTile from '@/components/StatTile.vue';
 import StatusPill from '@/components/StatusPill.vue';
 import EmptyState from '@/components/EmptyState.vue';
@@ -37,8 +38,8 @@ const match = (rows) => rows.filter((r) => (r.suite ?? '').toLowerCase().include
     </HeroPanel>
 
     <EmptyState v-if="data && !data.totals.runs" title="No runs yet"
-                body="Onboard a suite and run it; the outcomes land here." >
-      <RouterLink to="/suites/new" class="rounded-full bg-brand hover:bg-brand-deep px-4 py-2 text-[13.5px] font-medium text-white">
+                body="Onboard a suite and run it; the outcomes land here.">
+      <RouterLink to="/suites/new" class="rounded-full bg-brand px-4 py-2 text-[13.5px] font-medium text-white hover:bg-brand-deep">
         Onboard a project
       </RouterLink>
     </EmptyState>
@@ -54,7 +55,7 @@ const match = (rows) => rows.filter((r) => (r.suite ?? '').toLowerCase().include
       </div>
 
       <div class="mb-5 grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-        <section class="card p-5">
+        <section class="card min-w-0 p-5">
           <div class="flex items-baseline gap-3">
             <h2 class="text-[15px] font-medium">Runs per day</h2>
             <span class="text-[13px] text-ink-3">The last fourteen days.</span>
@@ -63,10 +64,10 @@ const match = (rows) => rows.filter((r) => (r.suite ?? '').toLowerCase().include
               <span class="flex items-center gap-1.5"><i class="size-2.5 rounded-[3px] bg-fail" /> Failed</span>
             </span>
           </div>
-          <RunsChart :days="data.days" class="mt-3" />
+          <Chart :spec="runsSpec(data.days)" class="mt-3" :height="240" :legend="false" />
         </section>
 
-        <section class="card wash-warm p-5">
+        <section class="card min-w-0 wash-warm p-5">
           <h2 class="text-[15px] font-medium">Passing</h2>
           <p class="mt-1 text-[13px] text-ink-2">Share of runs that finished clean.</p>
           <p class="mt-5 display text-5xl tabular-nums">
@@ -95,58 +96,62 @@ const match = (rows) => rows.filter((r) => (r.suite ?? '').toLowerCase().include
           <input v-model="filter" placeholder="Filter suites" aria-label="Filter suites"
                  class="ml-auto w-52 rounded-full border border-hairline bg-panel px-3.5 py-1 text-[12.5px] outline-none focus:border-ink/25">
         </div>
-        <table class="mt-3 w-full text-[13.5px]">
-          <thead class="border-y border-hairline text-left">
-            <tr class="table-head">
-              <th class="px-5 py-2.5 font-semibold">Suite</th>
-              <th class="px-3 py-2.5 font-semibold">Last run</th>
-              <th class="px-3 py-2.5 font-semibold">Pass rate</th>
-              <th class="px-5 py-2.5 text-right font-semibold">Status</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-hairline">
-            <tr v-for="s in match(data.suites)" :key="s.suite">
-              <td class="px-5 py-3">
-                <RouterLink v-if="s.suiteId" :to="`/suites/${s.suiteId}`" class="hover:underline">{{ s.suite }}</RouterLink>
-                <span v-else>{{ s.suite }}</span>
-              </td>
-              <td class="px-3 py-3 text-ink-2">{{ when(s.last.at) }}</td>
-              <td class="px-3 py-3 tabular-nums text-ink-2">{{ Math.round(s.passed / s.runs * 100) }}% of {{ s.runs }}</td>
-              <td class="px-5 py-3 text-right"><StatusPill :ok="s.last.ok" size="sm" /></td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="mt-3 overflow-x-auto">
+          <table class="w-full text-[13.5px]">
+            <thead class="border-y border-hairline text-left">
+              <tr class="table-head">
+                <th class="px-5 py-2.5 font-semibold">Suite</th>
+                <th class="px-3 py-2.5 font-semibold">Last run</th>
+                <th class="px-3 py-2.5 font-semibold">Pass rate</th>
+                <th class="px-5 py-2.5 text-right font-semibold">Status</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-hairline">
+              <tr v-for="s in match(data.suites)" :key="s.suite">
+                <td class="px-5 py-3">
+                  <RouterLink v-if="s.suiteId" :to="`/suites/${s.suiteId}`" class="hover:underline">{{ s.suite }}</RouterLink>
+                  <span v-else>{{ s.suite }}</span>
+                </td>
+                <td class="px-3 py-3 text-ink-2">{{ when(s.last.at) }}</td>
+                <td class="px-3 py-3 tabular-nums text-ink-2">{{ Math.round(s.passed / s.runs * 100) }}% of {{ s.runs }}</td>
+                <td class="px-5 py-3 text-right"><StatusPill :ok="s.last.ok" size="sm" /></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section class="card overflow-hidden">
         <div class="flex items-baseline gap-3 px-5 pt-5">
           <h2 class="text-[15px] font-medium">Latest</h2>
         </div>
-        <table class="mt-3 w-full text-[13.5px]">
-          <thead class="border-y border-hairline text-left">
-            <tr class="table-head">
-              <th class="px-5 py-2.5 font-semibold">Suite</th>
-              <th class="px-3 py-2.5 font-semibold">Steps</th>
-              <th class="px-3 py-2.5 font-semibold">Took</th>
-              <th class="px-5 py-2.5 text-right font-semibold">Status</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-hairline">
-            <tr v-for="r in match(data.latest)" :key="r.at">
-              <td class="px-5 py-3">
-                <p>{{ r.suite }}</p>
-                <p class="mt-0.5 text-[12px] text-ink-3">
-                  {{ when(r.at) }}<template v-if="r.error"> · {{ r.error }}</template>
-                </p>
-              </td>
-              <td class="px-3 py-3 tabular-nums text-ink-2">
-                {{ r.ok ? r.total : `${r.passed} of ${r.total}, stopped at ${r.step + 1}` }}
-              </td>
-              <td class="px-3 py-3 tabular-nums text-ink-2">{{ dur(r.ms) }}</td>
-              <td class="px-5 py-3 text-right"><StatusPill :ok="r.ok" size="sm" /></td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="mt-3 overflow-x-auto">
+          <table class="w-full text-[13.5px]">
+            <thead class="border-y border-hairline text-left">
+              <tr class="table-head">
+                <th class="px-5 py-2.5 font-semibold">Suite</th>
+                <th class="px-3 py-2.5 font-semibold">Steps</th>
+                <th class="px-3 py-2.5 font-semibold">Took</th>
+                <th class="px-5 py-2.5 text-right font-semibold">Status</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-hairline">
+              <tr v-for="r in match(data.latest)" :key="r.at">
+                <td class="px-5 py-3">
+                  <p>{{ r.suite }}</p>
+                  <p class="mt-0.5 text-[12px] text-ink-3">
+                    {{ when(r.at) }}<template v-if="r.defect"> · <RouterLink :to="`/defects/${r.defect}`" class="font-mono text-brand-2 hover:underline" :title="`Filed as ${r.defect} — open it`">{{ r.defect }}</RouterLink></template><template v-if="r.error"> · {{ r.error }}</template>
+                  </p>
+                </td>
+                <td class="px-3 py-3 tabular-nums text-ink-2">
+                  {{ r.ok ? r.total : `${r.passed} of ${r.total}, stopped at ${r.step + 1}` }}
+                </td>
+                <td class="px-3 py-3 tabular-nums text-ink-2">{{ dur(r.ms) }}</td>
+                <td class="px-5 py-3 text-right"><StatusPill :ok="r.ok" size="sm" /></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </section>
     </template>
   </div>

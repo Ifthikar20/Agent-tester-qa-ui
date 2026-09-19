@@ -28,6 +28,7 @@ import Field from '@/components/Field.vue';
 import ReauthSheet from '@/components/ReauthSheet.vue';
 import UpgradePrompt from '@/components/UpgradePrompt.vue';
 import ThemeSwitch from '@/components/ThemeSwitch.vue';
+import NotifyPanel from '@/components/NotifyPanel.vue';
 
 const live = useLive();
 const session = useSession();
@@ -44,7 +45,32 @@ const upgrade = ref(null);
 const state = ref(null);
 
 const refresh = async () => { state.value = await api.state(); live.secrets = state.value.secrets ?? []; };
-onMounted(refresh);
+
+/**
+ * Showing pages to a model: two consents the organisation gives, each off
+ * until an owner or admin says otherwise (server.js healStateFor). The
+ * deployment can offer a model — a key, GC_HEAL=ai, the chat on a model —
+ * but cannot decide for the organisation; `available` says whether the offer
+ * stands and `reason` why not. An older runner has no such route: no panel.
+ */
+const heal = ref(null);
+const healError = ref(null);
+const loadHeal = async () => { try { heal.value = await api.healSettings(); } catch { heal.value = null; } };
+const because = (reason) => ({
+  deployment: 'the deployment does not offer a model for fixes (GC_HEAL)',
+  switch: 'switched off by the operator',
+  key: 'the runner has no model to show it to',
+  organisation: null,
+}[reason] ?? null);
+async function consent(key, on) {
+  healError.value = null;
+  try { heal.value = await api.setHealSettings({ [key]: on }); }
+  catch (e) {
+    healError.value = e.switchedOff ? `${e.switchedOff} is turned off on this deployment` : e.message;
+    await loadHeal();
+  }
+}
+onMounted(() => { refresh(); loadHeal(); });
 
 /** Allow the drafted origin; say which proof the runner wants when it says step-up. */
 async function allow() {
@@ -109,10 +135,10 @@ async function remove(o) {
         <li v-for="o in live.origins" :key="o"
             class="flex items-center gap-2 rounded-full border border-hairline px-3 py-1.5 font-mono text-[12px]">
           {{ o }}
-          <button v-if="session.manages" class="text-ink-3 hover:text-critical" @click="remove(o)" :title="`Remove ${o}`">✕</button>
+          <button v-if="session.manages" class="text-ink-3 hover:text-critical" :title="`Remove ${o}`" @click="remove(o)">✕</button>
         </li>
       </ul>
-      <p v-if="state?.usage?.origins?.max !== null && state?.usage?.origins?.max !== undefined" class="mt-2 text-[12.5px] text-ink-3">
+      <p v-if="state?.usage?.origins?.max != null" class="mt-2 text-[12.5px] text-ink-3">
         {{ state.usage.origins.used }} of {{ state.usage.origins.max }} on the {{ state.plan }} plan.
       </p>
       <p v-if="!session.manages" class="mt-3 text-[12.5px] text-ink-3">Only an owner or admin of the organisation changes this list.</p>
@@ -120,7 +146,7 @@ async function remove(o) {
         <Field label="Allow another" class="flex-1">
           <input v-model="draft" placeholder="staging.acme.com" spellcheck="false" @keyup.enter="add">
         </Field>
-        <button class="mb-0.5 rounded-full bg-brand hover:bg-brand-deep px-4 py-2 text-[13px] font-medium text-white disabled:bg-ink/[0.05] disabled:text-ink-3"
+        <button class="mb-0.5 rounded-full bg-brand px-4 py-2 text-[13px] font-medium text-white hover:bg-brand-deep disabled:bg-ink/[0.05] disabled:text-ink-3"
                 :disabled="!draft" @click="add">Allow</button>
       </div>
     </section>
@@ -144,6 +170,9 @@ async function remove(o) {
       </p>
     </section>
 
+    <!-- Where the runner tells somebody when nobody has a page open (notify.js). -->
+    <NotifyPanel />
+
     <!-- The one setting that is the person's, not the organisation's: how this
          browser draws the app. Remembered here, never on the server. -->
     <section class="card mb-4 p-5">
@@ -156,6 +185,37 @@ async function remove(o) {
         <ThemeSwitch />
       </div>
       <p class="mt-3 text-[12.5px] text-ink-3">{{ themeChoice }}</p>
+    </section>
+
+    <!-- Two decisions about the organisation's own pages: whether a model may
+         read them to fix a step, and whether it may read them to draft tests. -->
+    <section v-if="heal" class="card mb-4 p-5">
+      <h2 class="text-[15px] font-medium">Showing pages to a model</h2>
+      <p class="mt-1.5 max-w-xl text-[13px] leading-relaxed text-ink-2">
+        Each is off until an owner or admin says otherwise. The deployment can offer a model; it
+        cannot decide for you. A page shown to a model goes with its typed values stripped and its
+        vault values redacted, inside a block the model is told is evidence, never instructions.
+      </p>
+      <div class="mt-4 space-y-3 text-[13px]">
+        <label class="flex items-start gap-3">
+          <input type="checkbox" class="mt-1" :checked="heal.ai?.enabled" :disabled="!session.manages" @change="consent('ai', $event.target.checked)">
+          <span>
+            <span class="font-medium">Fix broken steps</span> — when a recorded step fails, a model may read the page it
+            failed on and pick one move from a fixed menu; a fix to a saved case still waits for a person.
+            <span v-if="heal.ai && !heal.ai.available && because(heal.ai.reason)" class="block text-[12px] text-ink-3">Not on offer here: {{ because(heal.ai.reason) }}.</span>
+          </span>
+        </label>
+        <label class="flex items-start gap-3">
+          <input type="checkbox" class="mt-1" :checked="heal.plan?.enabled" :disabled="!session.manages" @change="consent('plan', $event.target.checked)">
+          <span>
+            <span class="font-medium">Draft test cases</span> — from the chat, a model may read a page and write cases for
+            you to tick, run and keep. Without this the runner still drafts them by rules, from what it already holds.
+            <span v-if="heal.plan && !heal.plan.available && because(heal.plan.reason)" class="block text-[12px] text-ink-3">Not on offer here: {{ because(heal.plan.reason) }}.</span>
+          </span>
+        </label>
+      </div>
+      <p v-if="!session.manages" class="mt-3 text-[12.5px] text-ink-3">Only an owner or admin of the organisation changes these.</p>
+      <p v-if="healError" class="mt-3 rounded-lg border border-critical/25 bg-critical/5 px-3 py-2 text-[12.5px] text-critical">{{ healError }}</p>
     </section>
 
     <section v-if="state" class="card p-5">

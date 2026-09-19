@@ -3,7 +3,8 @@ import { computed, ref, watch } from 'vue';
 import { api } from '@/api';
 import { useSuites } from '@/stores/suites';
 import { useLive } from '@/stores/live';
-import RunsChart from '@/components/RunsChart.vue';
+import { runsSpec } from '@/charts';
+import Chart from '@/components/Chart.vue';
 import StatusPill from '@/components/StatusPill.vue';
 import StatTile from '@/components/StatTile.vue';
 import EmptyState from '@/components/EmptyState.vue';
@@ -62,35 +63,37 @@ const dur = (ms) => (ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`);
             <span class="flex items-center gap-1.5"><i class="size-2.5 rounded-[3px] bg-fail" /> Failed</span>
           </span>
         </div>
-        <RunsChart :days="data.days" class="mt-3" />
+        <Chart :spec="runsSpec(data.days)" class="mt-3" :height="240" :legend="false" />
       </section>
 
       <section class="card overflow-hidden">
-        <table class="w-full text-[13.5px]">
-          <thead class="border-b border-hairline text-left">
-            <tr class="table-head">
-              <th class="px-5 py-3 font-semibold">Case</th>
-              <th class="px-3 py-3 font-semibold">Steps</th>
-              <th class="px-3 py-3 font-semibold">Took</th>
-              <th class="px-5 py-3 text-right font-semibold">Status</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-hairline">
-            <tr v-for="r in data.latest" :key="r.at">
-              <td class="px-5 py-3">
-                <p>{{ r.caseName ?? r.suite }}</p>
-                <p class="mt-0.5 text-[12px] text-ink-3">
-                  {{ when(r.at) }}<template v-if="r.error"> · {{ r.error }}</template>
-                </p>
-              </td>
-              <td class="px-3 py-3 tabular-nums text-ink-2">
-                {{ r.ok ? r.total : `${r.passed} of ${r.total}, stopped at ${r.step + 1}` }}
-              </td>
-              <td class="px-3 py-3 tabular-nums text-ink-2">{{ dur(r.ms) }}</td>
-              <td class="px-5 py-3 text-right"><StatusPill :ok="r.ok" size="sm" /></td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="overflow-x-auto">
+          <table class="w-full text-[13.5px]">
+            <thead class="border-b border-hairline text-left">
+              <tr class="table-head">
+                <th class="px-5 py-3 font-semibold">Case</th>
+                <th class="px-3 py-3 font-semibold">Steps</th>
+                <th class="px-3 py-3 font-semibold">Took</th>
+                <th class="px-5 py-3 text-right font-semibold">Status</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-hairline">
+              <tr v-for="r in data.latest" :key="r.at">
+                <td class="px-5 py-3">
+                  <p>{{ r.caseName ?? r.suite }}</p>
+                  <p class="mt-0.5 text-[12px] text-ink-3">
+                    {{ when(r.at) }}<template v-if="r.error"> · {{ r.error }}</template>
+                  </p>
+                </td>
+                <td class="px-3 py-3 tabular-nums text-ink-2">
+                  {{ r.ok ? r.total : `${r.passed} of ${r.total}, stopped at ${r.step + 1}` }}
+                </td>
+                <td class="px-3 py-3 tabular-nums text-ink-2">{{ dur(r.ms) }}</td>
+                <td class="px-5 py-3 text-right"><StatusPill :ok="r.ok" size="sm" /></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </section>
     </template>
   </div>

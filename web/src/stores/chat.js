@@ -23,18 +23,21 @@
 import { defineStore } from 'pinia';
 import { api } from '@/api';
 
-/** The runner's own limits (chat.js), mirrored so the page can say so before asking. */
+/** The runner's own limits (chat.js, chat-import.js), mirrored so the page can say so before asking. */
 export const TEXT_MAX = 2000;
+export const ATTACHMENTS_MAX = 4;
+export const ATTACHMENT_MAX_BYTES = 256 * 1024;
+export const ATTACHMENTS_MAX_BYTES = 300 * 1024;
 const TITLE_MAX = 60;
 /** The tools that drive a run: while one is in flight the page shows the live run under the tool line. */
-export const RUN_TOOLS = new Set(['run_case', 'run_suite', 'run_page_check', 'quickstart']);
+export const RUN_TOOLS = new Set(['run_case', 'run_suite', 'run_page_check', 'quickstart', 'run_drafts', 'plan_page_tests', 'run_import']);
 /** Events held while a send() waits on its 202; past this many, something else is wrong. */
 const EARLY_MAX = 200;
 /** Turn ids that finished, remembered so a stale answer to GET /api/chat cannot resurrect one. */
 const FINISHED_MAX = 20;
 
 /** The reply being written for a turn, before any of it has arrived. */
-const blank = (id, conversationId) => ({ id, conversationId, text: '', tools: [], proposal: null, running: false });
+const blank = (id, conversationId) => ({ id, conversationId, text: '', tools: [], proposal: null, running: false, startedAt: Date.now() });
 
 /**
  * Which conversation this viewer had open, remembered in the browser the way
@@ -56,6 +59,7 @@ export const useChatStore = defineStore('chat', {
     llm: null,          // { mode: 'claude'|'mock', model, key: { have, from } }
     budget: null,       // { used, max } — model calls today
     busy: null,         // { id, conversationId }: the turn the runner is answering, whoever asked
+    stopping: null,     // the turn a stop was asked for, until its reply lands
     conversations: [],  // the list rows, newest first
     current: null,      // the open conversation with its messages — or null, so the next send starts one
     /**
@@ -84,6 +88,7 @@ export const useChatStore = defineStore('chat', {
   },
 
   actions: {
+    // ------------------------------------------------------------ reading
     /**
      * What the runner offers, and its conversations. Quiet (no `loading`)
      * after the first time: a re-read behind a transcript is not a page load.
@@ -130,7 +135,8 @@ export const useChatStore = defineStore('chat', {
         // Gone — deleted from another tab, or a runner that no longer has it.
         if (e.status === 404) {
           this.conversations = this.conversations.filter((c) => c.id !== id);
-          if (this.current?.id === id) this.current = null;
+          if (this.current?.id === id) { this.current = null; remember(null); }
+          return;
         }
         this.error = e.message;
       }
@@ -150,16 +156,24 @@ export const useChatStore = defineStore('chat', {
       if (id && this.conversations.some((c) => c.id === id)) await this.open(id);
     },
 
+    // ------------------------------------------------------------- asking
     /**
      * Ask. Accepted with a 202 and answered on the socket: the person's
      * bubble goes up at once and the reply builds in `turn` as events land.
      *
      * @param confirm the id of the proposal a button confirmed, when one did
+     * @param choices which of the proposal's items were ticked — the drafted
+     *          checks to run (chat.js); absent means all of them
+     * @param attachments the files riding with the words (ChatComposer):
+     *          `[{ name, size, kind, encoding, data }]`; with no words, the
+     *          question is the one the runner would ask of such a file
      * @returns whether the runner took the turn — a refusal is in `error`
      *          (or `upgrade`, or `on`), never thrown at the view
      */
-    async send(text, { confirm = null } = {}) {
-      const asked = String(text ?? '').trim().slice(0, TEXT_MAX);
+    async send(text, { confirm = null, choices = null, attachments = null } = {}) {
+      const files = Array.isArray(attachments) ? attachments.slice(0, ATTACHMENTS_MAX) : [];
+      let asked = String(text ?? '').trim().slice(0, TEXT_MAX);
+      if (!asked && files.length) asked = files.some((f) => f.kind === 'code' || f.kind === 'flow') ? 'Turn this into checks' : 'What is in this file?';
       if (!asked || this.pending) return false;
       this.error = null;
       const conversationId = this.current?.id ?? null;
@@ -170,6 +184,8 @@ export const useChatStore = defineStore('chat', {
           ...(conversationId ? { conversationId } : {}),
           text: asked,
           ...(confirm ? { confirm } : {}),
+          ...(confirm && Array.isArray(choices) && choices.length ? { choices } : {}),
+          ...(files.length ? { attachments: files.map((f) => ({ name: f.name, encoding: f.encoding, data: f.data })) } : {}),
         });
       } catch (e) {
         // Whatever landed meanwhile was somebody else's turn: read it as it
@@ -207,6 +223,7 @@ export const useChatStore = defineStore('chat', {
       this.current.messages.push({
         id: `local_${r.turnId}`, role: 'user', at, text: asked, by: null, mind: null, model: null,
         tools: [], runs: [], offers: null, proposal: null, executed: null, error: null,
+        ...(files.length ? { attachments: files.map((f) => ({ name: f.name, kind: f.kind, size: f.size })) } : {}),
       });
       this.current.updatedAt = at;
       // A button's yes or no takes the proposal with it; the runner drops it
@@ -224,6 +241,18 @@ export const useChatStore = defineStore('chat', {
       return true;
     },
 
+    /**
+     * Stop the reply being written: a run of drafted checks ends after the
+     * one in flight (chat.js stop) — a run cannot be broken off mid-step —
+     * and the reply says how far it got. Nothing to stop is not an error.
+     */
+    async stop() {
+      this.error = null;
+      try { const r = await api.chatStop(); this.stopping = r.stopping ?? null; return true; }
+      catch (e) { this.error = e.message; return false; }
+    },
+
+    // --------------------------------------------------------- forgetting
     /** Delete a conversation. A reply in flight for it has nowhere to go, so it goes too. */
     async remove(id) {
       this.error = null;
@@ -235,6 +264,7 @@ export const useChatStore = defineStore('chat', {
       return true;
     },
 
+    // --------------------------------------------------------- the socket
     /**
      * The socket is (back) up. A reply that landed while it was down is on the
      * runner and not here: the list again, and the open conversation whole.
@@ -274,9 +304,11 @@ export const useChatStore = defineStore('chat', {
         case 'chat.tool': {
           const c = ev.call;
           if (!mine || !c?.id) break;
-          const call = { id: c.id, name: c.name, label: c.label ?? c.name, state: c.state, summary: c.summary ?? null };
-          // The same id twice — start, then done or error — and the latest wins.
+          // The same id twice — start, then done or error — and the latest wins;
+          // when it started and when it ended stay with it, for the working view.
           const i = this.turn.tools.findIndex((x) => x.id === c.id);
+          const at = i < 0 ? Date.now() : this.turn.tools[i].at;
+          const call = { id: c.id, name: c.name, label: c.label ?? c.name, state: c.state, summary: c.summary ?? null, at, doneAt: c.state === 'start' ? null : Date.now() };
           if (i < 0) this.turn.tools.push(call); else this.turn.tools.splice(i, 1, call);
           // A run tool that started is a run to show live; one refused before
           // it ran is not, and whatever run the runner last did is not this one.
@@ -299,6 +331,7 @@ export const useChatStore = defineStore('chat', {
           }
           if (mine) this.turn = null;
           if (this.busy?.id === ev.turn) this.busy = null;
+          if (this.stopping === ev.turn) this.stopping = null;
           this.finished.push(ev.turn);
           if (this.finished.length > FINISHED_MAX) this.finished.shift();
           // The row, until the list is read again: what was said last, and when.

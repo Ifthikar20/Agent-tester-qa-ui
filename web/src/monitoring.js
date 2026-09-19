@@ -10,8 +10,21 @@
  * `{ exists, visible, tag, id, classes, rect{w,h}, styles{fontSize,fontWeight,
  * color}, metrics{fontSizePx}, text, textLength, counts{rows,children} }`.
  * A monitor's `metrics` is the runner's `summarize()`: `{ exists, visible,
- * fontSize, width, height, rowCount, textLength, childElementCount }`.
+ * fontSize, width, height, rowCount, textLength, childElementCount }` — with
+ * `kind: 'page'` and `blocks` for a monitor on the whole page.
  */
+
+/**
+ * The reserved selector of a monitor on the whole page: not an element but
+ * every block on it (the runner's core.js measurePage), watched for any
+ * change to its layout or its words.
+ */
+export const PAGE_SELECTOR = ':page';
+export const isPageMonitor = (m) => !!m && m.selector === PAGE_SELECTOR;
+/** A selector as a card shows it: the whole page has no selector to show. */
+export const selectorLine = (sel) => (sel === PAGE_SELECTOR ? 'the whole page' : sel);
+/** What a rule about the whole page can say, in the phrasing the runner reads (compilePageRule). */
+export const PAGE_RULES = ['Nothing on the page may change', 'The layout must not change', 'The text must not change'];
 
 /** Nothing open: null, or Chrome's blank page, which is truthy and not a page. */
 export const isBlank = (url) => !url || url === 'about:blank';
@@ -90,10 +103,16 @@ export function elementFacts(snap) {
   return facts;
 }
 
-/** `16px · 640×48 · 5 rows · visible` — a monitor's live numbers, in one line. */
+/** `16px · 640×48 · 5 rows · visible` — a monitor's live numbers, in one line; `38 blocks · 1180×2140 · 2 310 chars` for the whole page. */
 export function metricsLine(m) {
   if (!m) return 'no measurement yet';
   if (m.exists === false) return 'element missing';
+  if (m.kind === 'page') {
+    const parts = [`${m.blocks ?? 0} blocks`];
+    if (m.width != null && m.height != null) parts.push(`${Math.round(m.width)}×${Math.round(m.height)}`);
+    if (m.textLength != null) parts.push(`${m.textLength} chars`);
+    return parts.join(' · ');
+  }
   const parts = [];
   if (m.fontSize != null) parts.push(`${m.fontSize}px`);
   if (m.width != null && m.height != null) parts.push(`${Math.round(m.width)}×${Math.round(m.height)}`);
@@ -114,7 +133,7 @@ export function chipText(c) {
     case 'eq': return `${c.metric} = ${rel}${v}`;
     case 'neq': return `${c.metric} ≠ ${v}`;
     case 'between': return `${c.metric} ${rel}${c.min}–${c.max}`;
-    case 'unchanged': return `${c.metric} unchanged`;
+    case 'unchanged': return c.metric === 'content' ? 'words unchanged' : `${c.metric} unchanged`;
     case 'contains': return `${c.metric} contains "${v}"`;
     case 'not_contains': return `${c.metric} without "${v}"`;
     case 'exists': return off ? 'must not exist' : 'must exist';
@@ -128,14 +147,87 @@ export function specChips(m) {
   const out = (m.spec?.checks ?? []).map((c) => ({ text: chipText(c), tone: 'neutral', title: c.message ?? '' }));
   if (m.specSource === 'provisional') out.push({ text: 'compiling with Claude…', tone: 'info', title: 'The mock compiler’s checks run meanwhile' });
   else if (m.specSource === 'claude') out.push({ text: 'compiled by Claude', tone: 'info', title: m.spec?.summary ?? '' });
+  // The mock's checks, and nothing went wrong on the way: said, so no card
+  // leaves "who compiled this?" unanswered. Gone wrong, the fallback chip says.
+  else if (m.specSource === 'mock' && !m.specError) out.push({ text: 'compiled by rules', tone: 'neutral', title: 'the mock compiler’s checks' });
   if (m.specError) out.push({ text: 'mock fallback', tone: 'warn', title: m.specError });
-  if (m.spec?.needsLlmJudgment) out.push({ text: 'needs judgment', tone: 'warn', title: m.spec.judgmentHint ?? '' });
+  // A spec with clauses says which clause is judged (clauseChips); the one
+  // chip is for monitors written before clauses were kept.
+  if (m.spec?.needsLlmJudgment && !m.spec.clauses?.length) out.push({ text: 'needs judgment', tone: 'warn', title: m.spec.judgmentHint ?? '' });
   return out;
 }
 
-/** `fontSize: 16 → 36`, one per metric that moved. */
+/** A clause as it fits on a chip: whole up to ~70 characters, then an ellipsis. */
+const CLAUSE_CHIP_MAX = 70;
+const clip = (t) => (t.length > CLAUSE_CHIP_MAX ? `${t.slice(0, CLAUSE_CHIP_MAX - 1).trimEnd()}…` : t);
+
+/**
+ * One chip per clause of the rule as the engineer wrote it, in order, saying
+ * what became of it: the checks it turned into, a call the runner makes on
+ * every confirmed change (or cannot make, without a key), or words nobody
+ * understood. This is the honest half of a spec — a clause that quietly
+ * vanished in compilation is a rule nobody is checking, and the chips are
+ * where that would show. Older specs have no clauses and get no chips.
+ */
+export function clauseChips(spec, llmMode) {
+  const checks = spec?.checks ?? [];
+  return (spec?.clauses ?? []).map((c) => {
+    const text = clip(String(c.text ?? '').trim());
+    if (c.outcome === 'checks') {
+      const named = (c.checkIds ?? []).map((id) => checks.find((k) => k.id === id)?.message).filter(Boolean);
+      return { text: `✓ ${text}`, tone: 'neutral', title: named.join(' · ') };
+    }
+    if (c.outcome === 'judgment') {
+      return llmMode === 'claude'
+        ? { text: `judged on change: ${text}`, tone: 'info', title: 'Claude reads the markup before and after each confirmed change and decides' }
+        : { text: `needs a key to judge: ${text}`, tone: 'warn', title: 'set ANTHROPIC_API_KEY — meanwhile the element is watched for any change' };
+    }
+    return { text: `not understood: ${text}`, tone: 'warn', title: 'No check came of these words — try saying it another way' };
+  });
+}
+
+/** `fontSize: 16 → 36`, one per metric that moved — or, for the whole page, `4 added · 9 moved`. */
 export function diffChips(diff) {
-  return Object.entries(diff ?? {}).map(([k, v]) => (k === 'htmlChanged' ? 'markup changed' : Array.isArray(v) ? `${k}: ${v[0]} → ${v[1]}` : `${k}: ${v}`));
+  return Object.entries(diff ?? {}).flatMap(([k, v]) => {
+    if (k === 'pageChanges') {
+      const t = v?.totals ?? {};
+      return [['added', t.added], ['removed', t.removed], ['moved', t.moved], ['reworded', t.changed]].filter(([, n]) => n > 0).map(([w, n]) => `${n} ${w}`);
+    }
+    return [k === 'htmlChanged' ? 'markup changed' : Array.isArray(v) ? `${k}: ${v[0]} → ${v[1]}` : `${k}: ${v}`];
+  });
+}
+
+const short = (t, n = 40) => (typeof t === 'string' && t.length > n ? `${t.slice(0, n - 1)}…` : (t ?? ''));
+/** `section#orders “Orders”` — a block of the page, named. */
+export function blockName(b) {
+  if (!b) return 'a block';
+  let s = String(b.t || 'block') + (b.id ? `#${b.id}` : '');
+  if (b.text) s += ` “${short(b.text)}”`;
+  return s;
+}
+/** `down 32px, 30px taller` — how a block moved. */
+export function moveWords(b) {
+  const out = [];
+  if (b.dy) out.push(`${b.dy > 0 ? 'down' : 'up'} ${Math.abs(Math.round(b.dy))}px`);
+  if (b.dx) out.push(`${b.dx > 0 ? 'right' : 'left'} ${Math.abs(Math.round(b.dx))}px`);
+  if (b.dh) out.push(`${Math.abs(Math.round(b.dh))}px ${b.dh > 0 ? 'taller' : 'shorter'}`);
+  if (b.dw) out.push(`${Math.abs(Math.round(b.dw))}px ${b.dw > 0 ? 'wider' : 'narrower'}`);
+  return out.join(', ') || 'moved';
+}
+/**
+ * One line per sampled change on the whole page: what was added, what went,
+ * what moved and what was reworded (the runner's diffPage samples; the chips
+ * carry the exact totals).
+ */
+export function pageLines(diff) {
+  const d = diff?.pageChanges;
+  if (!d) return [];
+  const out = [];
+  for (const b of d.added ?? []) out.push(`added ${blockName(b)}`);
+  for (const b of d.removed ?? []) out.push(`removed ${blockName(b)}`);
+  for (const b of d.moved ?? []) out.push(`${blockName(b)} ${moveWords(b)}`);
+  for (const b of d.changed ?? []) out.push(`${blockName({ t: b.t, id: b.id })} “${short(b.before)}” → “${short(b.after)}”`);
+  return out;
 }
 
 const TONES = {
@@ -147,8 +239,11 @@ const TONES = {
 };
 export const stateTone = (state) => TONES[state] ?? 'bg-ink/5 text-ink-2';
 
-/** The pill on an incident card. */
+/** The pill on an incident card. `title` is there when the word needs a sentence. */
 export function incidentPill(inc) {
+  // A change on a judged clause was confirmed and Claude has been asked: not
+  // yet a violation, not yet fine. Counted as unresolved until it is one.
+  if (inc.status === 'judging') return { label: 'Judging…', tone: 'bg-brand-50 text-brand-2', title: 'Claude is deciding whether this change breaks the rule' };
   if (inc.status === 'open') {
     return inc.type === 'missing' ? { label: 'missing', tone: 'bg-warn/10 text-warn' } : { label: 'open', tone: 'bg-critical/10 text-critical' };
   }

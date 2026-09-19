@@ -46,6 +46,16 @@ export const GLYPHS = {
   org:     'M5.5 7.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM10.5 7.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM2 13c0-2 1.6-3.3 3.5-3.3S9 11 9 13M7.5 13c0-2 1.3-3.3 3-3.3S14 11 14 13',
   monitor: 'M1.5 8.5h2.8l1.6-4.2 2.4 7.4 2-5 1.3 1.8h3',
   chat:    'M2.5 3h11v7.5H7.5L4.5 13v-2.5h-2z',
+  // The chat's suggestion tiles (views/ChatView.vue): a list, a run, a draft.
+  list:    'M5.5 4.5h8M5.5 8h8M5.5 11.5h8M2.5 4.5h.01M2.5 8h.01M2.5 11.5h.01',
+  play:    'M4.5 2.8v10.4L13 8z',
+  spark:   'M8 2.2l1.5 4.3L13.8 8l-4.3 1.5L8 13.8l-1.5-4.3L2.2 8l4.3-1.5z',
+  // The chat's files and charts: the paperclip on the composer, the agents that read a file, translate code, draw a chart.
+  paperclip: 'M13 7.5l-5.2 5.2a3 3 0 0 1-4.3-4.3L9 3a2 2 0 0 1 2.9 2.9L6.6 11.2a1 1 0 0 1-1.5-1.5l4.8-4.8',
+  code:    'M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5M9.2 3 6.8 13',
+  chart:   'M2.5 13.5h11M4.5 11V7.5M8 11V4M11.5 11V9',
+  // A defect's activity (components/DefectDrawer.vue): the tick of a closed one.
+  check:   'M3 8.5l3.2 3.2L13 5',
 };
 
 /**
@@ -71,6 +81,3 @@ for (const [path, url] of Object.entries(files)) {
 
 /** What was dropped in for this name, or null if it is still line art. */
 export const png = (name) => PNG[name] ?? null;
-
-/** Whether anything at all will draw for this name — a PNG or a glyph. */
-export const has = (name) => !!(PNG[name] || GLYPHS[name]);

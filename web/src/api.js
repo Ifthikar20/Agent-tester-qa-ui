@@ -12,7 +12,11 @@
  * `entitlement` wants a bigger plan, a 409 `chat_busy` wants the reply being
  * written to finish, and a 403 `switched_off` wants nothing at all — the
  * operator turned the feature off. The view offers the right button — or the
- * right sentence — instead of a red box.
+ * right sentence — instead of a red box. And the parsed answer rides along as
+ * `err.body` for the few refusals that carry more than a sentence: a compile
+ * the runner would not send to Claude (409 `no_model`, 429 `budget`, 503
+ * `unavailable`) says why in `message` and hands back the mock's `spec`, so
+ * the panel still has checks to show.
  *
  * Every path goes through `apiUrl`, which is the identity function while the
  * backend serves this app and a real origin once it does not. Writing the
@@ -46,6 +50,7 @@ async function req(path, { method = 'GET', body } = {}) {
     if (res.status === 401) useSession().forgetToken();
     const err = new Error(data.error || `${method} ${path} failed (${res.status})`);
     err.status = res.status;
+    err.body = data;
     if (data.needsOrigin) err.needsOrigin = data.needsOrigin;
     // The plan said no (docs/AUTH.md §10): which limit, and which plan it is.
     if (res.status === 402 && data.error === 'entitlement') {
@@ -116,6 +121,9 @@ export const api = {
   socketTicket: () => req('/api/socket-ticket', { method: 'POST' }),
   runs:    (suite) => req(`/api/runs${suite ? `?suite=${encodeURIComponent(suite)}` : ''}`),
   defects: () => req('/api/defects'),
+  // One defect by its number, with its activity and the runs behind it; a triage is an owner's or admin's PATCH.
+  defect:       (id) => req(`/api/defects/${encodeURIComponent(id)}`),
+  triageDefect: (id, body) => req(`/api/defects/${encodeURIComponent(id)}`, { method: 'PATCH', body }),
   hero:    () => req('/api/hero'),
   siteIcon: (origin) => bytes(`/api/sites/icon?origin=${encodeURIComponent(origin)}`),
 
@@ -160,6 +168,10 @@ export const api = {
   // The checks a rule would compile to, before the monitor exists — the
   // script shown under the sentence as it is typed. Nothing is kept.
   previewMonitor:  (body) => req('/api/monitors/preview', { method: 'POST', body }),
+  // The same sentence compiled by Claude, on request and from the daily
+  // budget, so what the model makes of it is seen before the monitor exists.
+  // A refusal throws with `err.body.message` and the mock's `err.body.spec`.
+  compileMonitor:  (body) => req('/api/monitors/compile', { method: 'POST', body }),
   removeMonitor:   (id) => req(`/api/monitors/${id}`, { method: 'DELETE' }),
   pauseMonitor:    (id) => req(`/api/monitors/${id}/pause`, { method: 'POST' }),
   resumeMonitor:   (id) => req(`/api/monitors/${id}/resume`, { method: 'POST' }),
@@ -171,6 +183,23 @@ export const api = {
   },
   resolveIncident: (id) => req(`/api/incidents/${id}/resolve`, { method: 'POST' }),
   monitorShot:     (name) => bytes(`/api/monitors/shots/${encodeURIComponent(name)}`),
+
+  // Schedules: suites run and monitored pages swept on a cadence, with nobody
+  // at the console (schedules.js). Run now answers 202; the outcome arrives on
+  // the socket as schedule.fired.
+  schedules:      (suite) => req(`/api/schedules${suite ? `?suite=${encodeURIComponent(suite)}` : ''}`),
+  createSchedule: (body) => req('/api/schedules', { method: 'POST', body }),
+  updateSchedule: (id, body) => req(`/api/schedules/${id}`, { method: 'PATCH', body }),
+  removeSchedule: (id) => req(`/api/schedules/${id}`, { method: 'DELETE' }),
+  runSchedule:    (id) => req(`/api/schedules/${id}/run`, { method: 'POST' }),
+
+  // Notifications: where an incident, a failed run or a defect is told
+  // (notify.js). Channels are the organisation's; managers set them.
+  notify:        () => req('/api/notify'),
+  createChannel: (body) => req('/api/notify/channels', { method: 'POST', body }),
+  updateChannel: (id, body) => req(`/api/notify/channels/${id}`, { method: 'PATCH', body }),
+  removeChannel: (id) => req(`/api/notify/channels/${id}`, { method: 'DELETE' }),
+  testChannel:   (id) => req(`/api/notify/channels/${id}/test`, { method: 'POST' }),
 
   // Help & support: a request from the top bar, and the access switch it turns on.
   support:        () => req('/api/support'),
@@ -186,4 +215,12 @@ export const api = {
   chatConversation: (id) => req(`/api/chat/${encodeURIComponent(id)}`),
   chatTurn:         (body) => req('/api/chat/turns', { method: 'POST', body }),
   deleteChat:       (id) => req(`/api/chat/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  // Stop the reply being written: a run of drafted checks ends after the one
+  // in flight. Answers { stopping: <turn id> | null }.
+  chatStop:         () => req('/api/chat/stop', { method: 'POST' }),
+
+  // Showing pages to a model: the organisation's two consents (fixing broken
+  // steps, drafting test cases), read and set by an owner or admin.
+  healSettings:     () => req('/api/settings/heal'),
+  setHealSettings:  (body) => req('/api/settings/heal', { method: 'PUT', body }),
 };

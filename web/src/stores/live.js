@@ -106,11 +106,23 @@ export const useLive = defineStore('live', {
     monitors: [],       // PublicMonitor, newest first
     incidents: [],      // Incident, newest first, capped
     picking: false,     // the runner's picker is armed on the page
-    picked: null,       // { selector, fingerprint, snapshot, label, url, readError, shot } from monitor.selected (+ monitor.shot)
+    /** Bumped when a schedule fires or the list changes (schedule.fired, schedules.changed): the panels reload on it. */
+    schedulesVersion: 0,
+    /** Bumped when a run or an incident filed, closed or reopened a defect (defects.changed): the Defects page reloads on it. */
+    defectsVersion: 0,
+    picked: null,       // { selector, fingerprint, snapshot, label, url, path, readError, shot } from monitor.selected (+ monitor.shot)
     pickError: null,    // a sentence for the Pick button, from a refusal
     hover: null,        // { describe, tag, text, w, h, fontSize }: what the picker is over, while picking
     pickMiss: null,     // a sentence: the last click while picking chose nothing (an iframe, say)
     monitoring: null,   // the /api/monitoring summary: { llm, budget, counts, picking }
+    /**
+     * Claude's compile landing on a saved monitor (monitor.compiled), by
+     * monitor id: { at, source, summary }. A card flashes it for a few
+     * seconds, because the checks a person approved in the preview were the
+     * mock's and these are not the same checks. Replaced, never mutated, so a
+     * view's watch sees each landing.
+     */
+    compiled: {},
     /**
      * Help & support (support.js): whether support access is on for this
      * organisation, as the runner last said. Loaded once the socket is up and
@@ -129,8 +141,13 @@ export const useLive = defineStore('live', {
      * the server's own default is the right answer and it may not be 420.
      */
     paceMs: (s) => (s.pace === 'fast' ? 0 : undefined),
-    /** Open incidents, for the sidebar's dot and the monitoring page's count. */
-    openIncidents: (s) => s.incidents.filter((i) => i.status === 'open').length,
+    /**
+     * Unresolved incidents, for the sidebar's dot and the monitoring page's
+     * count. `judging` counts: Claude has been asked whether the change
+     * breaks the rule, and until it answers the incident is nobody's to
+     * dismiss.
+     */
+    openIncidents: (s) => s.incidents.filter((i) => i.status !== 'resolved').length,
     /**
      * The navigation that produced the address we are showing — or none.
      *
@@ -345,6 +362,16 @@ export const useLive = defineStore('live', {
     },
 
     handle(ev) {
+      // Scheduled work runs on the organisation's own pooled page (the runner's
+      // backgroundSession), so its run and step events are not the console's:
+      // said in a line, never drawn as the live run. Its log lines, and what
+      // the schedule came to, come through as themselves.
+      if (ev.background && !['log', 'schedule.fired', 'schedules.changed'].includes(ev.t)) {
+        if (ev.t === 'suite.start') this.say(`scheduled: running ${ev.cases} case${ev.cases === 1 ? '' : 's'} of ${ev.suite} in the background`);
+        if (ev.t === 'suite.end') this.say(`scheduled: ${ev.suite}: ${ev.passed}/${ev.total} cases passed`, ev.passed === ev.total ? 'info' : 'error');
+        if (ev.t === 'run.end' && ev.caseName) this.say(`scheduled: ${ev.caseName} ${ev.ok ? 'passed' : 'failed'}`, ev.ok ? 'info' : 'error');
+        return;
+      }
       switch (ev.t) {
         case 'ready':
           // The greeting names the organisation and its origins and says who
@@ -353,7 +380,7 @@ export const useLive = defineStore('live', {
           this.url = ev.url; this.origins = ev.origins;
           // Another organisation's socket (an org switch reconnects with a
           // new ticket): its monitors are not ours to show.
-          if (this.org && ev.org && this.org !== ev.org) { this.monitors = []; this.incidents = []; this.picked = null; this.monitoring = null; this.home = null; }
+          if (this.org && ev.org && this.org !== ev.org) { this.monitors = []; this.incidents = []; this.picked = null; this.monitoring = null; this.home = null; this.compiled = {}; }
           this.org = ev.org ?? null;
           if ('picking' in ev) this.picking = !!ev.picking;
           this.back = !!ev.back;
@@ -423,6 +450,14 @@ export const useLive = defineStore('live', {
           this.recordedCount = ev.count ?? this.recordedCount;
           break;
 
+        case 'schedule.fired': {
+          this.schedulesVersion++;
+          const o = ev.schedule?.lastOutcome;
+          if (o) this.say(`schedule "${ev.schedule.name}": ${o.missed ? 'missed — the runner was busy' : o.error ? o.error : o.pages != null ? `swept ${o.pages} page${o.pages === 1 ? '' : 's'}` : `${o.passed}/${o.total} passed`}`, o.ok === false ? 'error' : 'info');
+          break;
+        }
+        case 'schedules.changed': this.schedulesVersion++; break;
+        case 'defects.changed': this.defectsVersion++; break;
         case 'suite.start':
           this.suiteRun = { suite: ev.suite, cases: ev.cases, done: 0, passed: 0 };
           this.say(`running ${ev.cases} case${ev.cases === 1 ? '' : 's'} of ${ev.suite}`);
@@ -473,6 +508,8 @@ export const useLive = defineStore('live', {
           this.picked = {
             selector: ev.selector, fingerprint: ev.fingerprint ?? null, snapshot: ev.snapshot ?? null, label: ev.label ?? '',
             url: ev.url ?? this.url, readError: ev.readError ?? null, shot: null,
+            // Where it sits: its ancestors, outermost first, like ['body', 'main', 'div.hero'].
+            path: Array.isArray(ev.path) ? ev.path : [],
           };
           break;
         // The clip of the picked element, a moment after the pick. Set in
@@ -488,6 +525,11 @@ export const useLive = defineStore('live', {
           break;
         }
         case 'monitor.changed': this.upsertMonitor(ev.monitor); break;
+        // Claude's checks replaced the mock's on a saved monitor; the
+        // monitor.changed with the new spec follows on its own.
+        case 'monitor.compiled':
+          this.compiled = { ...this.compiled, [ev.monitorId]: { at: Date.now(), source: ev.source, summary: ev.summary } };
+          break;
         case 'monitor.gone': this.dropMonitor(ev.id); break;
         case 'incident.opened':
         case 'incident.updated':
