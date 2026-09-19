@@ -8,8 +8,9 @@
  * mousemove in the driven page, the runner's picker outlines the element
  * INSIDE the page — so the outline arrives in the video — and a click chooses
  * it without reaching the page. The rail is the panel the proof of concept
- * drew inside the page: what was picked, the rule, the monitors. Incidents,
- * with their evidence, sit under the stage.
+ * drew inside the page: what was picked, the rule, the monitors — or, with
+ * nothing picked, the whole page watched for any change. Incidents, with
+ * their evidence, sit under the stage.
  *
  * Nothing here decides anything. The runner says when picking is on, what was
  * picked, what state a monitor is in and when an incident opens; the store
@@ -22,8 +23,9 @@ import { api } from '@/api';
 import { useLive } from '@/stores/live';
 import { useSuites } from '@/stores/suites';
 import {
-  chipText, chipTone, clauseChips, defaultRule, describeElement, diffChips, elementFacts, hoverLine, incidentPill, isBlank,
-  llmBadge, metricsLine, originOfUrl, pathOfUrl, projectOf, severityTone, specChips, stateTone, suggestionsFor, verdictSource,
+  PAGE_RULES, PAGE_SELECTOR, chipText, chipTone, clauseChips, defaultRule, describeElement, diffChips, elementFacts, hoverLine, incidentPill,
+  isBlank, llmBadge, metricsLine, originOfUrl, pageLines, pathOfUrl, projectOf, selectorLine, severityTone, specChips, stateTone, suggestionsFor,
+  verdictSource,
 } from '@/monitoring';
 import { clock, when } from '@/time';
 import TopBar from '@/components/TopBar.vue';
@@ -56,6 +58,12 @@ const preview = ref(null);      // the checks the rule box compiles to, from the
 const previewing = ref(false);
 const compiling = ref(false);   // Compile with Claude pressed, the runner has not answered yet
 const compileError = ref(null); // why the runner would not send the rule to Claude, in its words
+const pageForm = ref(false);    // Watch the whole page pressed: the form in place of the pick
+const pageLabel = ref('');
+const pageRule = ref(PAGE_RULES[0]);
+const pagePreview = ref(null);  // what the chosen page rule compiles to, from the runner
+const addingPage = ref(false);
+const pageError = ref(null);
 const only = ref('open');       // open | all
 const pending = ref(null);      // the id whose row action is in flight
 const rowError = ref(null);     // { id, msg }
@@ -171,6 +179,7 @@ watch(() => live.painted, (p) => { if (p) opening.value = null; });
 // find the words for "it must still be there".
 watch(() => live.picked, (p) => {
   if (!p) return;
+  pageForm.value = false;
   label.value = p.label || describeElement(p.snapshot);
   rule.value = defaultRule(p.snapshot);
   addError.value = null;
@@ -318,6 +327,45 @@ async function addMonitor() {
   } finally { adding.value = false; }
 }
 
+// ------------------------------------------------------- the whole page
+// No element to pick: the page itself, every block on it, against one of
+// three rules. The runner measures it, watches it a moment to learn what
+// changes on its own, and keeps the blocks; this form only names the rule.
+function openPageForm() {
+  live.pickError = null;
+  added.value = null;
+  pageError.value = null;
+  pageLabel.value = '';
+  pageForm.value = true;
+  loadPagePreview();
+}
+async function loadPagePreview() {
+  try {
+    const { spec } = await api.previewMonitor({ ruleText: pageRule.value, tag: 'page', selector: PAGE_SELECTOR, label: pageLabel.value.trim() });
+    pagePreview.value = spec ?? null;
+  } catch { pagePreview.value = null; }
+}
+watch(pageRule, () => { if (pageForm.value) loadPagePreview(); });
+// The page went away under the form (a handover, a close): nothing to watch.
+watch(() => live.url, (u) => { if (isBlank(u)) pageForm.value = false; });
+async function addPage() {
+  if (!canPick.value.ok || addingPage.value) return;
+  addingPage.value = true;
+  pageError.value = null;
+  try {
+    const { monitor } = await api.createMonitor({
+      selector: PAGE_SELECTOR, label: pageLabel.value.trim() || 'Whole page', ruleText: pageRule.value,
+      url: live.url, tag: 'page', suiteId: project.value?.id ?? undefined,
+    });
+    live.upsertMonitor(monitor);
+    added.value = { label: monitor.label, path: pathOfUrl(monitor.url) };
+    pageForm.value = false;
+  } catch (e) {
+    if (e.entitlement) live.upgrade = { ...e.entitlement, of: 'monitor.add' };
+    else pageError.value = e.message;
+  } finally { addingPage.value = false; }
+}
+
 // ---------------------------------------------------------- row actions
 /** One shape for every row action: busy on the row, the error beside it. */
 async function act(id, fn) {
@@ -423,7 +471,8 @@ const justCompiled = (m) => {
         </template>
         <template v-else>
           Point at the page above and scroll it with your wheel — clicks and keys go to the page you
-          are watching, never to this one. Press <b class="font-medium text-ink-2">Pick element</b> to choose what to watch.
+          are watching, never to this one. Press <b class="font-medium text-ink-2">Pick element</b> to choose what to watch,
+          or <b class="font-medium text-ink-2">Watch the whole page</b> for any change at all.
         </template>
       </p>
 
@@ -483,7 +532,7 @@ const justCompiled = (m) => {
                 {{ clock(inc.openedAt) }}<template v-if="inc.resolvedAt"> → {{ clock(inc.resolvedAt) }}</template> · {{ when(inc.openedAt) }}
               </span>
             </div>
-            <p class="mt-1 truncate font-mono text-[11.5px] text-ink-3" :title="inc.selector">{{ inc.selector }}</p>
+            <p class="mt-1 truncate font-mono text-[11.5px] text-ink-3" :title="inc.selector">{{ selectorLine(inc.selector) }}</p>
             <p class="mt-1 text-[12.5px] italic text-ink-2">“{{ inc.ruleText }}”</p>
 
             <div v-for="x in inc.violations" :key="x.checkId" class="mt-2 rounded-lg border border-critical/25 bg-critical/5 px-3 py-2 text-[12.5px]">
@@ -496,6 +545,10 @@ const justCompiled = (m) => {
             <div v-if="diffChips(inc.diff).length" class="mt-2 flex flex-wrap gap-1.5">
               <span v-for="d in diffChips(inc.diff)" :key="d" class="rounded-full border border-hairline px-2 py-0.5 font-mono text-[11.5px] text-ink-2">{{ d }}</span>
             </div>
+            <!-- The whole page: what was added, what went, what moved, what was reworded — the samples; the chips have the totals. -->
+            <ul v-if="pageLines(inc.diff).length" class="mt-2 space-y-0.5 font-mono text-[11.5px] text-ink-2" data-page-lines>
+              <li v-for="(l, i) in pageLines(inc.diff)" :key="i" class="truncate" :title="l">{{ l }}</li>
+            </ul>
 
             <div class="mt-3 grid gap-2 sm:grid-cols-2">
               <Shot caption="before (baseline)" :name="inc.before?.screenshot" :alt="`${inc.monitorLabel} before`" />
@@ -628,12 +681,44 @@ const justCompiled = (m) => {
           </div>
         </template>
 
+        <template v-else-if="pageForm">
+          <!-- The whole page: no element to name, every block on it watched.
+               The runner keeps the blocks; the card only gets their count. -->
+          <p class="eyebrow mt-3">The whole page</p>
+          <p class="mt-2 text-[13.5px] font-medium text-ink">
+            Every block on <span class="font-mono font-normal text-ink-2">{{ pathOfUrl(live.url) }}</span>
+          </p>
+          <p class="mt-1 text-[12.5px] leading-relaxed text-ink-2">
+            Every heading, paragraph, link, button, cell and box — where it sits and what it says. Whatever
+            changes on its own, a ticker or a clock, is learned while the monitor is made and never reported.
+          </p>
+          <Field label="Label" class="mt-4">
+            <input v-model="pageLabel" placeholder="Whole page">
+          </Field>
+          <Field label="What must stay true" class="mt-3" :error="pageError"
+                 hint="Runs every time this page is opened, and on every change while it is open.">
+            <select v-model="pageRule" data-page-rule>
+              <option v-for="r in PAGE_RULES" :key="r" :value="r">{{ r }}</option>
+            </select>
+          </Field>
+          <div v-if="pagePreview" class="mt-2 flex flex-wrap gap-1.5">
+            <span v-for="c in pagePreview.checks" :key="c.id" class="rounded-full border px-2 py-0.5 text-[11.5px]" :class="chipTone('neutral')" :title="c.message">{{ chipText(c) }}</span>
+          </div>
+          <div class="mt-3 flex gap-2">
+            <Btn :busy="addingPage" busy-label="Measuring…" :disabled="!canPick.ok" data-page-add @click="addPage">Watch the page</Btn>
+            <Btn variant="ghost" @click="pageForm = false">Cancel</Btn>
+          </div>
+        </template>
+
         <template v-else>
-          <div class="mt-3">
+          <div class="mt-3 flex flex-wrap gap-2">
             <Btn :busy="arming" busy-label="Starting…" :disabled="!canPick.ok" @click="startPick">Pick element</Btn>
+            <Btn variant="ghost" :disabled="!canPick.ok" data-page-watch
+                 title="Watch every heading, paragraph, link, button, cell and box on this page for any change"
+                 @click="openPageForm">Watch the whole page</Btn>
           </div>
           <p class="mt-2 text-[12.5px] text-ink-3">
-            {{ canPick.ok ? 'Hover the page above and click the element you want to watch.' : canPick.why }}
+            {{ canPick.ok ? 'Hover the page above and click the element you want to watch — or watch the whole page for any change.' : canPick.why }}
           </p>
           <p v-if="live.pickError" class="mt-2 rounded-lg border border-critical/25 bg-critical/5 px-3 py-2 text-[12.5px] text-critical">
             {{ live.pickError }}
@@ -671,7 +756,7 @@ const justCompiled = (m) => {
               <span v-if="m.onPage === false" class="shrink-0 rounded-full border border-warn/40 bg-warn/10 px-2 py-0.5 text-[11.5px] text-warn">not on this page</span>
               <span class="shrink-0 rounded-full px-2 py-0.5 text-[11.5px] font-medium" :class="stateTone(m.state)">{{ m.state }}</span>
             </div>
-            <p class="mt-1 truncate font-mono text-[11.5px] text-ink-3" :title="m.selector">{{ m.selector }}</p>
+            <p class="mt-1 truncate font-mono text-[11.5px] text-ink-3" :title="m.selector">{{ selectorLine(m.selector) }}</p>
             <p class="mt-1 text-[12.5px] italic text-ink-2">“{{ m.ruleText }}”</p>
             <div class="mt-2 flex flex-wrap gap-1.5">
               <span v-for="c in specChips(m)" :key="c.text" class="rounded-full border px-2 py-0.5 text-[11.5px]" :class="chipTone(c.tone)" :title="c.title">{{ c.text }}</span>
