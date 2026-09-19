@@ -9,6 +9,7 @@ import HeroPanel from '@/components/HeroPanel.vue';
 import StatTile from '@/components/StatTile.vue';
 import StatusPill from '@/components/StatusPill.vue';
 import EmptyState from '@/components/EmptyState.vue';
+import SchedulePanel from '@/components/SchedulePanel.vue';
 
 const store = useSuites();
 const live = useLive();
@@ -102,6 +103,9 @@ async function allow() {
       <StatTile label="Pass rate" :value="rate" :note="runs ? `${runs.totals.week} runs this week` : ''" />
       <StatTile label="Monitors" :value="watching ? watching.monitors.length : '—'" :note="monitorNote" />
     </div>
+
+    <!-- What runs on its own: the suite on a cadence (schedules.js). -->
+    <SchedulePanel kind="suite" :suite-id="suite.id" class="mb-4" />
 
     <div class="grid gap-4 lg:grid-cols-2">
       <section class="card p-5">

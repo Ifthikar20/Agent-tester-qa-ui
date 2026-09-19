@@ -34,6 +34,7 @@ import UpgradePrompt from '@/components/UpgradePrompt.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import Stage from '@/components/Stage.vue';
 import Shot from '@/components/Shot.vue';
+import SchedulePanel from '@/components/SchedulePanel.vue';
 
 const live = useLive();
 const stage = ref(null);
@@ -643,6 +644,9 @@ const justCompiled = (m) => {
           </p>
         </template>
       </section>
+
+      <!-- The monitored pages opened on a cadence, so a change is found while nobody is looking (schedules.js). -->
+      <SchedulePanel kind="sweep" title="Sweeps" class="mb-4" />
 
       <section class="card p-5">
         <div class="flex items-baseline gap-2">

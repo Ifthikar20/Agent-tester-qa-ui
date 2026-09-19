@@ -106,6 +106,8 @@ export const useLive = defineStore('live', {
     monitors: [],       // PublicMonitor, newest first
     incidents: [],      // Incident, newest first, capped
     picking: false,     // the runner's picker is armed on the page
+    /** Bumped when a schedule fires or the list changes (schedule.fired, schedules.changed): the panels reload on it. */
+    schedulesVersion: 0,
     picked: null,       // { selector, fingerprint, snapshot, label, url, path, readError, shot } from monitor.selected (+ monitor.shot)
     pickError: null,    // a sentence for the Pick button, from a refusal
     hover: null,        // { describe, tag, text, w, h, fontSize }: what the picker is over, while picking
@@ -436,6 +438,13 @@ export const useLive = defineStore('live', {
           this.recordedCount = ev.count ?? this.recordedCount;
           break;
 
+        case 'schedule.fired': {
+          this.schedulesVersion++;
+          const o = ev.schedule?.lastOutcome;
+          if (o) this.say(`schedule "${ev.schedule.name}": ${o.missed ? 'missed — the runner was busy' : o.error ? o.error : o.pages != null ? `swept ${o.pages} page${o.pages === 1 ? '' : 's'}` : `${o.passed}/${o.total} passed`}`, o.ok === false ? 'error' : 'info');
+          break;
+        }
+        case 'schedules.changed': this.schedulesVersion++; break;
         case 'suite.start':
           this.suiteRun = { suite: ev.suite, cases: ev.cases, done: 0, passed: 0 };
           this.say(`running ${ev.cases} case${ev.cases === 1 ? '' : 's'} of ${ev.suite}`);

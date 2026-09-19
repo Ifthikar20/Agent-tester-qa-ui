@@ -48,7 +48,7 @@ export function forOrg(org) {
      *   kept, and counted by today() against the plan, but absent from every
      *   total the dashboard shows and never a defect.
      */
-    record({ suite, suiteId, caseId, caseName, url, ms, results, draft = false }) {
+    record({ suite, suiteId, caseId, caseName, url, ms, results, draft = false, scheduled = false }) {
       const failed = results.filter((r) => !r.ok);
       const entry = {
         at: Date.now(),
@@ -69,6 +69,8 @@ export function forOrg(org) {
         error: failed[0]?.error?.split('\n')[0]?.slice(0, 240) ?? null,
         step: failed[0] ? failed[0].i : null,
         ...(draft ? { draft: true } : {}),
+        // Started by a schedule, not a person (schedules.js): the dashboard tells the two apart.
+        ...(scheduled ? { scheduled: true } : {}),
       };
       all.push(entry);
       if (all.length > CAP) all = all.slice(-CAP);

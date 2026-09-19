@@ -181,6 +181,15 @@ export const api = {
   resolveIncident: (id) => req(`/api/incidents/${id}/resolve`, { method: 'POST' }),
   monitorShot:     (name) => bytes(`/api/monitors/shots/${encodeURIComponent(name)}`),
 
+  // Schedules: suites run and monitored pages swept on a cadence, with nobody
+  // at the console (schedules.js). Run now answers 202; the outcome arrives on
+  // the socket as schedule.fired.
+  schedules:      (suite) => req(`/api/schedules${suite ? `?suite=${encodeURIComponent(suite)}` : ''}`),
+  createSchedule: (body) => req('/api/schedules', { method: 'POST', body }),
+  updateSchedule: (id, body) => req(`/api/schedules/${id}`, { method: 'PATCH', body }),
+  removeSchedule: (id) => req(`/api/schedules/${id}`, { method: 'DELETE' }),
+  runSchedule:    (id) => req(`/api/schedules/${id}/run`, { method: 'POST' }),
+
   // Help & support: a request from the top bar, and the access switch it turns on.
   support:        () => req('/api/support'),
   requestSupport: (body) => req('/api/support/request', { method: 'POST', body }),
