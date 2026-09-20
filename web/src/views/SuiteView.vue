@@ -19,11 +19,32 @@ const live = useLive();
 watch(() => route.params.id, (id) => id && store.load(id), { immediate: true });
 
 const suite = computed(() => store.current);
-const crumbs = computed(() => [
-  { label: 'Test suites', to: '/suites' },
-  { label: suite.value?.name ?? route.params.id, to: `/suites/${route.params.id}` },
-  ...(route.name === 'suite' ? [] : [{ label: { 'suite-pages': 'Pages', 'suite-cases': 'Cases', 'suite-runs': 'Runs' }[route.name] }]),
-]);
+
+/**
+ * The trail, one crumb per section — and two for a single test, because a test
+ * is two levels down and a trail that skipped the list would leave the only
+ * way back as the browser's own button.
+ *
+ * The test's name comes from the suite already in the store rather than from
+ * the page below: the shell draws the crumb, so the shell has to know it, and
+ * asking the child to hand it up is a second source for a name the store
+ * already holds.
+ */
+const SECTIONS = { 'suite-pages': 'Pages', 'suite-cases': 'Cases', 'suite-tests': 'Tests', 'suite-runs': 'Runs', 'suite-settings': 'Settings' };
+const crumbs = computed(() => {
+  const head = [
+    { label: 'Test suites', to: '/suites' },
+    { label: suite.value?.name ?? route.params.id, to: `/suites/${route.params.id}` },
+  ];
+  if (route.name === 'suite') return head;
+  if (route.name === 'suite-test') {
+    const c = suite.value?.cases?.find((x) => x.id === route.params.testId);
+    return [...head,
+      { label: 'Tests', to: `/suites/${route.params.id}/tests` },
+      { label: c?.name ?? 'Test' }];
+  }
+  return [...head, { label: SECTIONS[route.name] }];
+});
 
 /**
  * Run every case, with the button saying so.

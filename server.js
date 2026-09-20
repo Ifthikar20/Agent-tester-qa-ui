@@ -4,6 +4,7 @@ import { chromium } from 'playwright';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { VirtualCursor, sleep } from './cursor.js';
 import { OPS, validate, PACE, paceOf } from './ops.js';
@@ -18,6 +19,14 @@ import { LOCAL } from './org.js';
 import { blocked } from './reach.js';
 import { NoSuchSuite, originOf, pageCheckFlow } from './suites.js';
 import { discover, links } from './targets.js';
+import { HARMFUL } from './harmful.js';
+import { explore } from './explore.js';
+import { runGoal, composeMove, AI_MAX_PER_RUN, ASK_WALL_MS } from './agent.js';
+import { sayAction, showAction, checkAction } from './vocabulary.js';
+import {
+  MAX_CANDIDATES, DEFAULT_CANDIDATES, menuFrom, compile, candidatesFrom, composeDraft, composeRevise,
+  draftByRules, runPlanLoop, candidateId, stepsOf,
+} from './chat-plan.js';
 import { parse } from './parse.js';
 import { parseFlow, flatten, toFlow } from './flow.js';
 import { toMermaid } from './diagram.js';
@@ -171,6 +180,26 @@ const DOCS = docsIndex.load(fileURLToPath(new URL('./', import.meta.url)));
 const chatBudget = createBudget({ max: CHAT_AI_PER_DAY });
 
 /**
+ * What an agentic run may spend asking what to do next (agent.js).
+ *
+ * Its own budget rather than the chat's, because they fail differently: a
+ * chat that runs out of budget answers from the rules and the person reads a
+ * slightly worse sentence, while a run that runs out mid-step stops being
+ * agentic halfway through and has to say so. Sharing one number would let a
+ * busy afternoon of conversation quietly turn everybody's tests back into
+ * replays.
+ *
+ * The same key and the same resolver, though — there is one key in this
+ * process (§11) and this does not add a second.
+ */
+const AGENT_AI_PER_DAY = process.env.GC_AGENT_AI_MAX_PER_DAY?.trim() ? Number(process.env.GC_AGENT_AI_MAX_PER_DAY) : 400;
+if (!Number.isInteger(AGENT_AI_PER_DAY) || AGENT_AI_PER_DAY < 0) {
+  console.error(`\n  GC_AGENT_AI_MAX_PER_DAY is "${process.env.GC_AGENT_AI_MAX_PER_DAY}"; it takes a whole number of calls a day.\n`);
+  process.exit(1);
+}
+const agentBudget = createBudget({ max: AGENT_AI_PER_DAY });
+
+/**
  * Every store is keyed by organisation (tenancy.js, docs/AUTH.md §10). The
  * flat files a pre-tenancy runner left behind are moved under `local` first,
  * BEFORE any store is opened, so the move is one rename and not a merge.
@@ -208,6 +237,28 @@ const homeUrl = () => chooseHome({
 let page = null;
 let recorder = null;
 let running = false;
+/**
+ * Who has asked for their run to stop.
+ *
+ * A step is not interruptible — `OPS[step.op]` is a Playwright call already in
+ * flight, and killing one halfway would leave the page in a state no later
+ * step could reason about. So Stop is read BETWEEN steps, the way the chat
+ * reads its own stop between attempts (chat.js): the step you pressed on
+ * finishes, and nothing after it begins.
+ *
+ * A set of organisations rather than a boolean, because two organisations can
+ * be running at once — one at the console, one on its pooled page — and a
+ * single flag would stop whichever asked last.
+ */
+const stopping = new Set();
+/**
+ * A run that has stopped to ask the person watching a question (agent.js).
+ *
+ * One per organisation, because one run per organisation. The run is holding
+ * the browser while this sits here, which is the point: an answer about a page
+ * is only worth anything while that page is still on the screen.
+ */
+const questions = new Map();
 /** What runs with nobody at the console (schedules.js), up once the browser is. */
 let scheduler = null;
 /** Pooled contexts for that work (pool.js), one per organisation; made with the browser. */
@@ -831,12 +882,31 @@ app.get('/api/state', (req, res) => {
     // override, and needs to know what it is overriding.
     paceMs: PACE,
     org: req.space.org,
+    // What this workspace is called, and whether anybody has said yet. With a
+    // control plane the organisation's own name wins in the UI; this is the
+    // answer for a runner that has nobody to ask (workspace.js).
+    workspace: req.space.workspace.describe(),
     plan: req.ent.plan,
     driving: driver.describe(req.space.org),
     usage: usage(req),
   });
 });
 
+
+/**
+ * What this workspace is called, and who set it up.
+ *
+ * Readable by anyone who can reach the runner, because it is a label rather
+ * than a secret — it is drawn at the top of every page. A PATCH is how the
+ * first-run flow names it and how Settings renames it; with a control plane
+ * the organisation's name is the one the UI shows, and this is still kept so
+ * that a runner later taken off its control plane does not forget what it was.
+ */
+app.get('/api/workspace', (req, res) => sendOk(res, { workspace: req.space.workspace.describe() }));
+app.patch('/api/workspace', (req, res) => {
+  try { sendOk(res, { workspace: req.space.workspace.set(req.body ?? {}) }); }
+  catch (err) { fail(res, err); }
+});
 
 app.get('/api/origins', (req, res) => res.json({ origins: req.space.origins.list() }));
 app.post('/api/origins', (req, res) => {
@@ -965,6 +1035,341 @@ async function scanPageOf({ suite, pg, space }) {
   }
 }
 
+/**
+ * Read one page for a model to draft against (chat-plan.js).
+ *
+ * The same work a scan does — open it under the origin gate, take its targets
+ * and its links — plus the page's own words as the accessibility tree, which
+ * is what the drafter is shown inside its untrusted block. The read REWRITES
+ * the page's targets, which is scan_page's own rule: a draft made against a
+ * stale list would name controls the page no longer has.
+ *
+ * The fingerprint is a hash of that tree. A case drafted from one page and
+ * failing against a different one is a fact worth having (chat-plan.js
+ * classify), and comparing hashes is how the loop knows.
+ */
+async function readPageOf({ suite, pg, space }) {
+  await take(space.org);
+  if (running) throw Object.assign(new Error('A run is in progress'), { status: 409 });
+
+  running = true;
+  try {
+    await OPS.goto(page, { url: pg.url }, { cursor, emit, nav, onNavigate: publishTargets, origins: space.origins });
+    const items = await discover(page);
+    const linked = await links(page).catch(() => []);
+    space.suites.updatePage(suite.id, pg.id, { targets: items, linked });
+    const snapshot = await page.locator('body').ariaSnapshot().catch(() => '');
+    const title = await page.title().catch(() => '');
+    return {
+      targets: items,
+      links: linked,
+      capture: {
+        title,
+        snapshot,
+        fingerprint: createHash('sha256').update(snapshot).digest('hex').slice(0, 16),
+        url: page.url(),
+      },
+    };
+  } finally {
+    running = false;
+    armRelease();
+    await publishTargets();
+  }
+}
+
+/**
+ * Draft cases for one page (chat-plan.js), after a person has pressed yes.
+ *
+ * The page is read live, a closed JSON schema is built from that read — the
+ * step's target an enum of the names `discover()` found, its path an enum of
+ * the page's links — and Claude or, without a key or a budget, the rules give
+ * up to four candidates. Every one is mapped into the case language, rendered
+ * with `toFlow`, validated exactly as a saved case is, and required to read
+ * back as it was written. Nothing here runs anything.
+ */
+async function planPageOf({ suite, pg, focus = '', count = null, space }) {
+  const read = await readPageOf({ suite, pg, space });
+  const redact = (s) => redactWith(space.vault, s);
+  const menu = menuFrom(read, { redact });
+  const wanted = Math.max(1, Math.min(MAX_CANDIDATES, Number(count) || DEFAULT_CANDIDATES));
+
+  // Claude when there is one and the day's budget has room; the rules
+  // otherwise, which is an answer rather than an apology.
+  const mayAsk = CHAT.mode === 'claude' && chatResolver && chatBudget.used() < chatBudget.max;
+  let raw = null;
+  if (mayAsk) {
+    const request = composeDraft({ suiteName: suite.name, page: pg, read, menu, focus, count: wanted });
+    const answer = await chatResolver.draft({ text: request.text, menu }).catch(() => null);
+    if (answer) { chatBudget.take(); raw = candidatesFrom(answer, menu); }
+  }
+  const mind = raw ? 'claude' : 'rules';
+  if (!raw) raw = draftByRules({ read, suite, page: pg, menu }, { harmful: HARMFUL, count: wanted });
+
+  const checkFlow = checkFlowFor(space);
+  const candidates = raw.slice(0, MAX_CANDIDATES).map((c, i) => compile(c, {
+    id: candidateId(i), menu, page: { ...pg, url: read.capture.url }, suiteName: suite.name, checkFlow,
+  }));
+  return {
+    url: read.capture.url,
+    targets: read.targets.length,
+    links: read.links.length,
+    fingerprint: read.capture.fingerprint,
+    mind,
+    candidates,
+  };
+}
+
+/**
+ * Run the drafted cases a person ticked (chat-plan.js runPlanLoop).
+ *
+ * Each is a real run marked a draft, and a failure is classified from the
+ * runner's own words and a fresh read of the page: a target that turned up
+ * late or moved is repaired mechanically and run once more; a check that
+ * failed after every action passed is the application's bug and is never
+ * revised. The loop is bounded four ways — attempts, model calls, a wall
+ * clock, and the stop button — and whatever it does not reach is reported as
+ * not run, with why.
+ */
+async function runDraftsOf({ suite, pg, cases, fingerprint = null, space, ent, stopped = () => false, onProgress = () => {} }) {
+  const redact = (s) => redactWith(space.vault, s);
+  const checkFlow = checkFlowFor(space);
+  const menuOf = (read) => menuFrom(read, { redact });
+  const read = () => readPageOf({ suite, pg, space });
+  const mayAsk = CHAT.mode === 'claude' && chatResolver;
+
+  const r = await runPlanLoop({
+    cases: cases.map((c) => ({ ...c, steps: stepsOf(c.flow), fingerprint })),
+    read,
+    menuOf,
+    composeRevise: ({ candidate, evidence, read: fresh, menu }) =>
+      composeRevise({ suiteName: suite.name, page: pg, candidate, evidence, read: fresh, menu }),
+    revise: mayAsk
+      ? async ({ text, menu }) => {
+        if (chatBudget.used() >= chatBudget.max) return null;
+        const answer = await chatResolver.revise({ text, menu }).catch(() => null);
+        if (answer) chatBudget.take();
+        return answer;
+      }
+      : null,
+    compile: (candidate, menu) => compile(candidate, {
+      id: candidate.id, menu, page: { ...pg, url: pg.url }, suiteName: suite.name, checkFlow,
+    }),
+    run: async (steps, meta) => {
+      const plan = validate({ suite: `${suite.name} · ${meta.name}`, steps });
+      return run(plan, { suiteId: suite.id, caseId: null, caseName: meta.name, space, ent, draft: true });
+    },
+    stopped,
+    onProgress,
+  });
+  return r;
+}
+
+/**
+ * The suite's cases as STEPS rather than as script.
+ *
+ * A case is stored as a flow document, and the Cases page shows you that —
+ * which is right when you are editing one and wrong when you only want to know
+ * what the test does. The `%% at` marks alone can be half of what is on screen.
+ *
+ * So this parses each case with the same validator a run uses and hands back
+ * the steps. It stays here because the parser does: the Vue app carries the
+ * vocabulary so it can render a step, and deliberately not the document format
+ * (scripts/copies.js). A case that no longer parses comes back with its error
+ * rather than taking the page down with it.
+ */
+app.get('/api/suites/:id/tests', (req, res) => {
+  try {
+    const s = req.space.suites.get(req.params.id);
+    const checkFlow = checkFlowFor(req.space);
+    // Every case's newest run in one pass, rather than a scan of the history
+    // per row (runs.js lastByCase).
+    const last = req.space.history.lastByCase();
+    const tests = s.cases.map((c) => ({ ...testOf(c, checkFlow), lastRun: lastRunOf(last.get(c.id)) }));
+    sendOk(res, { suite: { id: s.id, name: s.name, baseUrl: s.baseUrl }, tests });
+  } catch (err) { fail(res, err); }
+});
+
+/**
+ * One test, for the page that is about one test.
+ *
+ * The list hands back every case's steps because a list of tests IS their
+ * steps; this route exists for what a list cannot afford to carry — the case's
+ * own document, so the page can offer the script without a second call, and
+ * the runs that case has had, which is a scan of the history nobody wants
+ * repeated forty times.
+ */
+app.get('/api/suites/:id/tests/:testId', (req, res) => {
+  try {
+    const s = req.space.suites.get(req.params.id);
+    const c = s.cases.find((x) => x.id === req.params.testId);
+    if (!c) return fail(res, Object.assign(new Error('No such test in this suite'), { status: 404 }));
+    const runs = req.space.history.forCase(c.id);
+    sendOk(res, {
+      suite: { id: s.id, name: s.name, baseUrl: s.baseUrl },
+      test: { ...testOf(c, checkFlowFor(req.space)), flow: c.flow, createdAt: c.createdAt ?? null, lastRun: lastRunOf(runs[0]) },
+      runs: runs.map((r) => ({ at: r.at, ok: r.ok, ms: r.ms, passed: r.passed, total: r.total, error: r.error ?? null, step: r.step ?? null, scheduled: r.scheduled === true })),
+    });
+  } catch (err) { fail(res, err); }
+});
+
+/**
+ * A test from a sentence, written here and now.
+ *
+ * The other way to get a test from words is the chat: it researches the site,
+ * proposes, drafts concrete steps and asks twice before anything runs
+ * (chat-plan.js, explore.js). That is the right shape when you want to READ
+ * the steps before you trust them, and it is four approvals and a site crawl
+ * when all somebody said was "test the sign-up flow".
+ *
+ * Since a `goal` exists there is a shorter honest answer: write the sentence
+ * down as the test. "Reach the sign-up page and create an account" IS a step
+ * now, and the finding-the-page part happens at run time against the real
+ * page rather than at authoring time against a crawl of it (agent.js). No
+ * model is called here at all — this route only writes a document.
+ *
+ * The check is optional and it is the only thing that makes the result a
+ * verdict about the application: without one the test passes when the runner
+ * could carry its goals out, which is worth something and is not the same
+ * claim. The UI says so on the test's page rather than quietly conflating them.
+ *
+ * The document is rendered with `toFlow` from the IR and then read back
+ * through the real validator, exactly as `chat-plan.js compile()` does — so
+ * what gets saved is something this runner can parse, or nothing is saved.
+ */
+app.post('/api/suites/:id/tests', (req, res) => {
+  try {
+    const s = req.space.suites.get(req.params.id);
+    const goal = String(req.body?.goal ?? '').trim();
+    const check = String(req.body?.check ?? '').trim();
+    if (!goal) throw Object.assign(new Error('Say what the test should do'), { status: 400 });
+    if (!s.baseUrl) throw Object.assign(new Error('This suite has no address to start from'), { status: 400 });
+
+    const steps = [
+      { op: 'goto', url: s.baseUrl },
+      { op: 'goal', text: goal },
+      ...(check ? [{ op: 'expect', assert: 'textVisible', value: check }] : []),
+    ];
+    // Shape first, and with the words the person typed still in front of them
+    // — `checkAction` says "a goal may not contain a quote" and that is a
+    // sentence somebody can act on, where "could not save" is not.
+    for (const step of steps) {
+      const why = checkAction(step);
+      if (why !== true) throw Object.assign(new Error(why), { status: 400 });
+    }
+    const flow = toFlow({ suite: s.name, steps });
+    const name = String(req.body?.name ?? '').trim() || titleOf(goal);
+    sendOk(res, { case: req.space.suites.addCase(s.id, { name, flow, source: 'written' }, checkFlowFor(req.space)) });
+  } catch (err) { fail(res, err); }
+});
+
+/**
+ * A sentence, researched, and written down as a test with real steps.
+ *
+ * This is the third way into a test and the one the other two leave a gap
+ * between. Recording one means doing it yourself first. Writing a `goal` means
+ * the runner works it out every time it runs, which survives a redesign and
+ * costs a model call a step. This reads the site ONCE, now, and writes down
+ * concrete steps you can read before you trust them — the shape a QA engineer
+ * actually wants for a flow they already understand.
+ *
+ * Nothing here is new machinery. `explore.js` walks the site by address and
+ * never presses anything; `chat-plan.js` turns one page into candidates whose
+ * every target came from that page's own accessibility tree and whose document
+ * is round-tripped through the real validator before it is kept. What is new
+ * is that they run from a press on the Tests page instead of through four
+ * approvals in the chat, and that they say what they are doing while they do
+ * it — a person watching a browser think for forty seconds deserves to know
+ * which part it is on.
+ */
+async function draftTestOf({ suite, goal, space, ent, stopped = () => false }) {
+  const say = (key, state, text) => emitTo(space.org, { t: 'draft.step', key, state, text });
+  emitTo(space.org, { t: 'draft.start', goal });
+  try {
+    say('ask', 'done', `Read what you asked for: ${goal}`);
+
+    say('explore', 'doing', `Researching ${suite.baseUrl}`);
+    const found = await exploreSiteOf({
+      u: new URL(suite.baseUrl), focus: goal, suiteId: suite.id, space, ent, stopped,
+      onProgress: ({ path, opened, of }) => say('explore', 'doing', `Reading ${path} — ${opened + 1} of at most ${of}`),
+    });
+    if (!found.best) throw new Error(`nothing on ${suite.baseUrl} could be read`);
+    say('explore', 'done', `Researched ${suite.baseUrl} — read ${found.opened} page${found.opened === 1 ? '' : 's'}, kept ${found.kept}`);
+
+    // The page the walk decided the request was about, re-read from the suite
+    // because exploring just wrote to it.
+    const fresh = space.suites.get(suite.id);
+    const pg = fresh.pages.find((p) => p.id === found.best.id);
+    if (!pg) throw new Error('the page the research picked is no longer in this project');
+
+    say('draft', 'doing', `Working out the steps on ${pg.path}`);
+    const plan = await planPageOf({ suite: fresh, pg, focus: goal, count: 1, space });
+    const candidate = plan.candidates.find((c) => c.ok);
+    if (!candidate) {
+      const why = plan.candidates.map((c) => c.dropped).filter(Boolean)[0] ?? 'nothing it wrote would run';
+      throw new Error(`could not write a test for that on ${pg.path} — ${why}`);
+    }
+
+    const made = fresh.cases
+      ? space.suites.addCase(fresh.id, { name: candidate.name, pageId: pg.id, flow: candidate.flow, source: 'generated' }, checkFlowFor(space))
+      : null;
+    say('draft', 'done', `Wrote “${made.name}” — ${made.steps} step${made.steps === 1 ? '' : 's'}`);
+    emitTo(space.org, { t: 'draft.end', ok: true, testId: made.id });
+    // `mind` says whether Claude wrote the steps or the rules did, and the page
+    // shows it: a test drafted with no key is a weaker draft and should not
+    // look identical to one that was reasoned about.
+    return { test: made, why: candidate.why, mind: plan.mind, page: { id: pg.id, path: pg.path }, explored: { opened: found.opened, kept: found.kept } };
+  } catch (err) {
+    emitTo(space.org, { t: 'draft.end', ok: false, error: err.message });
+    throw err;
+  }
+}
+
+/**
+ * Research a site and write a test for what was asked, in one press.
+ *
+ * It holds the browser for as long as it takes — a walk of up to twelve pages
+ * and one draft — so it is a POST that answers when it is done, with the
+ * progress going out on the socket meanwhile.
+ */
+app.post('/api/suites/:id/tests/draft', async (req, res) => {
+  const space = req.space;
+  let suite;
+  try { suite = space.suites.get(req.params.id); } catch (err) { return fail(res, err, 404); }
+  if (gate(res, originOf(suite), space)) return;
+  const goal = String(req.body?.goal ?? '').trim();
+  if (!goal) return fail(res, Object.assign(new Error('Say what the test should do'), { status: 400 }));
+  try { sendOk(res, await draftTestOf({ suite, goal, space, ent: req.ent, stopped: () => stopping.has(space.org) })); }
+  catch (err) { fail(res, err); }
+});
+
+/** A sentence, as the name of the test it became: its own words, cut to a title. */
+function titleOf(goal) {
+  const words = goal.replace(/\s+/g, ' ').trim();
+  const cut = words.length <= 60 ? words : `${words.slice(0, 59).replace(/\s+\S*$/, '')}…`;
+  return cut.charAt(0).toUpperCase() + cut.slice(1);
+}
+
+/** A case, said as a test: what it is, and the steps it parses to. */
+function testOf(c, checkFlow) {
+  const base = { id: c.id, name: c.name, pageId: c.pageId ?? null, source: c.source ?? null, updatedAt: c.updatedAt ?? null };
+  try {
+    const plan = checkFlow(c.flow);
+    // `entry` is the fingerprint of what the page offered when it was
+    // recorded — evidence for a failure, and noise on a page about what
+    // the test does.
+    return { ...base, steps: plan.steps.map(({ entry, ...step }) => step), error: null };
+  } catch (err) {
+    return { ...base, steps: [], error: err.message };
+  }
+}
+
+/**
+ * A test's last run, cut to what a row draws: when, whether it passed, how
+ * long, and how far it got. Not the whole history entry — the fixes, the
+ * model's why and the defect are a run's business, not a list's.
+ */
+const lastRunOf = (r) => (r ? { at: r.at, ok: r.ok, ms: r.ms, passed: r.passed, total: r.total, error: r.error ?? null } : null);
+
 app.post('/api/suites/:id/cases', (req, res) => {
   try { sendOk(res, { case: req.space.suites.addCase(req.params.id, req.body ?? {}, checkFlowFor(req.space)) }); }
   catch (err) { fail(res, err); }
@@ -997,8 +1402,68 @@ app.post('/api/suites/:id/run', async (req, res) => {
   // How much of this run to perform, for this run only. Absent means the
   // server's default, so a caller that has never heard of pace is unaffected.
   const pace = paceOf(req.query.pace, PACE);
-  try { sendOk(res, await runCasesOf({ suite, wanted, pace, space, ent: req.ent })); }
+  /**
+   * How this run decides what to do, and why AGENTIC is the default here.
+   *
+   * A replay does exactly what was recorded, and what was recorded is a name
+   * and a point on a page that has since been redesigned. In practice that
+   * means a run that says "'Careers' is on the page, but the press would land
+   * outside the window" and stops — a true sentence about a test that is
+   * telling you nothing about the site. The person who pressed Run wanted to
+   * know whether they can still get to Careers, and the answer is yes.
+   *
+   * So a run somebody starts works itself out unless they ask for the other
+   * thing. `?mode=replay` is that ask, and it is worth keeping: a replay is
+   * exact, free and repeatable, which is what you want when you are pinning
+   * down a regression rather than checking the site still works.
+   *
+   * Scheduled work is the other way round — `runCasesOf` still defaults to
+   * replay, so unattended runs stay deterministic and cost nothing.
+   */
+  const mode = req.query.mode === 'replay' ? 'replay' : 'agentic';
+  // Clear what this site has stored in the browser before starting. Opt-in,
+  // because it is destructive of a sign-in somebody may have wanted kept —
+  // and necessary, because a test that signs up cannot run twice without it.
+  const fresh = req.query.fresh === '1';
+  try { sendOk(res, await runCasesOf({ suite, wanted, pace, mode, fresh, space, ent: req.ent })); }
   catch (err) { fail(res, err); }
+});
+
+/**
+ * Stop the run this organisation has going.
+ *
+ * It answers immediately and truthfully: the flag is set, and the run ends
+ * after the step it is on (the `stopping` set, above the executor — a step in
+ * flight is a Playwright call that cannot be torn in half without leaving the
+ * page somewhere no later step could reason about). So this says "asked", not
+ * "stopped"; `run.end` on the socket is what says it actually has.
+ *
+ * Idempotent, and harmless with nothing running: run() clears the flag before
+ * its first step, so a stop nobody needed cannot poison the next run.
+ */
+app.post('/api/run/stop', (req, res) => {
+  stopping.add(req.space.org);
+  emitTo(req.space.org, { t: 'log', level: 'warn', msg: 'Stopping after this step…' });
+  sendOk(res, { stopping: true });
+});
+
+/**
+ * Answer the question a run stopped to ask (agent.js `ask`).
+ *
+ * `text` carries on with what you said; `giveUp` is you looking at the page
+ * and saying no, which fails the step in your words rather than the model's.
+ * A 409 when nothing is waiting, because the alternative is a button that
+ * appears to work and silently does nothing — most often because the question
+ * timed out while it was being typed.
+ */
+app.post('/api/run/answer', (req, res) => {
+  const pending = questions.get(req.space.org);
+  if (!pending) return fail(res, Object.assign(new Error('Nothing is waiting for an answer — the run has moved on'), { status: 409 }));
+  const giveUp = req.body?.giveUp === true;
+  const text = String(req.body?.text ?? '').trim().slice(0, 200);
+  if (!giveUp && !text) return fail(res, Object.assign(new Error('Say something, or mark it failed'), { status: 400 }));
+  pending.resolve({ text, giveUp });
+  sendOk(res, { answered: true });
 });
 
 /**
@@ -1009,7 +1474,7 @@ app.post('/api/suites/:id/run', async (req, res) => {
  * refused before case one, not discovered halfway. And the plan before the
  * lock: a run the plan refuses never takes the browser.
  */
-async function runCasesOf({ suite, wanted, pace = PACE, space, ent, scheduled = false, session = null }) {
+async function runCasesOf({ suite, wanted, pace = PACE, mode = 'replay', fresh = false, space, ent, scheduled = false, session = null }) {
   if (!wanted.length) throw new Error('This suite has no cases to run');
   ent.check('runs.per_day', space.history.today(), wanted.length);
   // On a pooled session (a schedule's) the console's lock is not taken: the
@@ -1041,9 +1506,13 @@ async function runCasesOf({ suite, wanted, pace = PACE, space, ent, scheduled = 
     // Express 4 does not catch a rejection from an async handler, so an
     // unexpected throw here would take the process with it rather than failing
     // one case. A suite run survives a bad case.
-    const r = await run(plan, { suiteId: suite.id, caseId: c.id, caseName: c.name, pace, space, ent, scheduled, session })
+    const r = await run(plan, { suiteId: suite.id, caseId: c.id, caseName: c.name, pace, mode, fresh, instructions: suite.instructions ?? '', space, ent, scheduled, session })
       .catch((err) => ({ ok: false, passed: 0, total: 0, error: err.message }));
     outcomes.push({ case: c.id, name: c.name, ...r });
+    // Stop means stop the suite, not stop this case and start the next one.
+    // The cases that never ran are absent from the outcomes rather than
+    // reported as failures.
+    if (r.stopped) { say({ t: 'log', level: 'warn', msg: `${suite.name}: stopped — the remaining cases did not run` }); break; }
   }
   const passed = outcomes.filter((o) => o.ok).length;
   say({ t: 'suite.end', suite: suite.name, passed, total: outcomes.length });
@@ -1175,6 +1644,101 @@ async function quickstartOf({ u, name, space, ent }) {
     suite: space.suites.get(suite.id),
     targets: items.length,
     run: outcome,
+  };
+}
+
+/**
+ * Research a site from a prompt (explore.js), after a person has pressed yes.
+ *
+ * Opens the address, walks it same-origin and breadth-first without pressing
+ * anything, ranks what it found against the words of the request, and keeps
+ * the pages that scored as a suite — the entry page, and up to three the
+ * request was actually about. What comes back names the page it thinks was
+ * meant, which the chat then offers to draft tests for; drafting is a separate
+ * press, because reading a site and writing tests for it are two decisions.
+ *
+ * Its every navigation is `OPS.goto`, so an origin nobody allowed refuses here
+ * exactly as it does everywhere, with the origin on the error for the button
+ * that unblocks it.
+ */
+async function exploreSiteOf({ u, focus = '', name = null, suiteId = null, space, ent, stopped = () => false, onProgress = () => {} }) {
+  // Filling a suite somebody already made, or making one. Asked from a suite's
+  // own Tests page, making a second suite of the same site is the wrong
+  // answer — it is the first one that is sitting there empty.
+  const into = suiteId ? space.suites.get(suiteId) : null;
+  if (!into) ent.check('suites.max', space.suites.list().length);
+  await take(space.org);
+  if (running) throw Object.assign(new Error('A run is in progress'), { status: 409 });
+
+  let found;
+  running = true;
+  try {
+    found = await explore(u.href, {
+      focus,
+      stopped,
+      open: (url) => OPS.goto(page, { url }, { cursor, emit, nav, onNavigate: publishTargets, origins: space.origins }),
+      read: async () => ({
+        url: page.url(),
+        title: (await page.title().catch(() => '')).trim().slice(0, 80),
+        targets: await discover(page),
+        links: await links(page).catch(() => []),
+      }),
+      onPage: ({ path, opened, of }) => {
+        onProgress({ path, opened, of });
+        emit({ t: 'log', level: 'info', msg: `reading ${path} (${opened + 1} of at most ${of})` });
+      },
+    });
+  } finally {
+    running = false;
+    armRelease();
+    await publishTargets();
+  }
+
+  const read = found.pages.filter((p) => !p.error);
+  if (!read.length) {
+    const err = new Error(found.halted ? `nothing could be read: ${found.halted}` : 'nothing could be read there');
+    if (/not allowed yet/.test(found.halted ?? '')) { err.origin = found.origin; err.url = u.href; }
+    throw err;
+  }
+
+  // The entry page, and the ones the request was about. A page that scored
+  // nothing is something the walk passed through, not something to keep.
+  const entry = read.find((p) => p.url === found.pages[0]?.url) ?? read[0];
+  const keep = [entry, ...found.ranked.filter((p) => !p.error && p.score > 0 && p !== entry).slice(0, 3)];
+
+  const title = entry.title || u.host;
+  const suite = into ?? space.suites.create({
+    name: String(name ?? '').trim() || title || u.host,
+    baseUrl: u.href,
+    description: `Explored from ${u.href}`,
+  });
+  // A page the suite already has is not added twice; its targets are refreshed
+  // instead, which is what a re-read of a page means everywhere else here.
+  const already = new Map((suite.pages ?? []).map((p) => [p.path, p]));
+  const pages = [];
+  for (const p of keep) {
+    try {
+      const pg = already.get(p.path) ?? space.suites.addPage(suite.id, {
+        name: (p.name || p.path).slice(0, 80),
+        path: p.path,
+        expect: [{ kind: 'url', value: p.path }],
+      });
+      space.suites.updatePage(suite.id, pg.id, { targets: p.targets, linked: p.links });
+      pages.push({ id: pg.id, name: pg.name, path: pg.path, score: p.score ?? 0, why: p.why ?? [] });
+    } catch { /* a path the suite will not take (another origin): the rest still land */ }
+  }
+
+  const bestPath = found.best?.path ?? null;
+  return {
+    suiteId: suite.id,
+    suite: space.suites.get(suite.id),
+    origin: found.origin,
+    opened: found.pages.length,
+    kept: pages.length,
+    pages,
+    best: pages.find((p) => p.path === bestPath) ?? pages[0] ?? null,
+    halted: found.halted,
+    ms: found.ms,
   };
 }
 
@@ -1461,11 +2025,10 @@ app.post('/api/chat/turns', (req, res) => {
   } catch (err) { fail(res, err); }
 });
 /**
- * Stop, so the UI's Stop button has an answer here too. What it ends — a batch
- * of drafted tests, between attempts (chat-plan.js) — needs the deployed
- * runner's plan actions (readPage, planPage, runDrafts), which this copy does
- * not carry: the `plan_page_tests` tool does not exist here, and the answer
- * is the turn asked to stop, or null when nothing is running.
+ * Stop, so the UI's Stop button has an answer here too. What it ends is a
+ * batch of drafted tests, between attempts (chat-plan.js runPlanLoop reads it
+ * between candidates and between attempts, never mid-step). The answer is the
+ * turn asked to stop, or null when nothing is running.
  */
 app.post('/api/chat/stop', (req, res) => {
   try { sendOk(res, { stopping: chat.stop(req.space) }); } catch (err) { fail(res, err); }
@@ -1634,6 +2197,9 @@ console.log(`\n  ghostclick  ->  http://localhost:${PORT}` +
             `\n  chat        ->  ${CHAT.mode === 'claude'
               ? `Claude (${CHAT_MODEL}) answers from the organisation's own stores and runs its saved cases — key from ${CHAT_KEY.source}, at most ${chatBudget.max} calls a day (GC_CHAT_AI_MAX_PER_DAY)`
               : `the mock mind — rules over the same tools${CHAT_KEY.key ? ' (GC_CHAT=mock)' : ' — set ANTHROPIC_API_KEY for Claude'}`}` +
+            `\n  agentic     ->  ${CHAT.mode === 'claude'
+              ? `a run may work its steps out against the page (agent.js) — at most ${AI_MAX_PER_RUN} moves a run and ${agentBudget.max} calls a day (GC_AGENT_AI_MAX_PER_DAY); assertions and vault values always replay`
+              : 'off — a goal step needs a model, so a case with one fails rather than passing quietly'}` +
             `\n  version     ->  ${identity.commit ?? 'unknown'}` +
             `${buildTime() ? `, ui built ${buildTime().replace('T', ' ').slice(0, 16)}` : ', ui NOT BUILT'}\n`);
 
@@ -1964,6 +2530,7 @@ async function newSession() {
       flow: toFlow({ suite: 'Recorded flow', steps }),
     }),
     onError: (msg) => emit({ t: 'log', level: 'error', msg }),
+    onNote: (msg) => emit({ t: 'log', level: 'info', msg }),
   });
   await recorder.attach();
 
@@ -2165,13 +2732,24 @@ chat.configure({
     runPlan: run,
     scanPage: scanPageOf,
     quickstart: quickstartOf,
+    // Drafting tests for a page. The tool is offered only where the switch
+    // that gates a live page read is on — a draft is a read, and a read is
+    // the runner opening somebody's page.
+    plans: (space, switches) => {
+      try { switches?.demand?.('runner.onboarding'); } catch { return null; }
+      return { on: true };
+    },
+    planPage: planPageOf,
+    runDrafts: runDraftsOf,
+    // Research a site from a prompt: walk it, rank what is there against the
+    // words of the request, keep the pages it was about as a suite.
+    exploreSite: exploreSiteOf,
     // The documentation: a tool only where the checkout has any.
     docs: () => (DOCS.sections.length ? DOCS : null),
   },
 });
 
 await newSession();
-browserReady = true;
 
 const home = homeUrl();
 if (home) await page.goto(home).catch((err) => console.error(`  could not open ${home}: ${err.message}`));
@@ -2194,6 +2772,250 @@ const vaultFor = (space, ent) => ({
 });
 
 /**
+ * Which steps an agentic run works out for itself, and which it replays
+ * exactly however agentic it was asked to be. The exclusions are not
+ * conveniences — each is a property of the run that would otherwise be lost:
+ *
+ *   `expect`   the case's verdict on the application. A model asked whether
+ *              the check it was working towards now passes will say yes.
+ *   `goto`     where the browser goes. That is the case's decision and the
+ *              organisation's allowlist's, and it is why the move schema has
+ *              no address in it at all (agent.js).
+ *   `wait`     there is nothing to work out. Spending a model call to be told
+ *              to wait 500ms is a slower run and the same behaviour.
+ *   a vault    the value is a secret this process does not show a model, so
+ *   reference  there is nothing it could decide about it.
+ *
+ * A `goal` never reaches here: it has no replay, and ops.js sends it straight
+ * to the agent in any run.
+ */
+const workedOut = (step) => !['expect', 'goto', 'wait', 'goal'].includes(step.op) && !step.valueRef;
+
+/**
+ * Put the agent's question to whoever is watching, and hold until they answer.
+ *
+ * Three ways out, and all three are real answers. A sentence carries on the
+ * goal with what they said. "Mark it failed" is a person looking at the page
+ * and saying no, which is a perfectly good verdict and often the right one.
+ * And silence for five minutes ends it too, because a run that holds the
+ * browser forever waiting for somebody who has gone home is worse than a
+ * failed test.
+ *
+ * Stop is watched as well. Without that, pressing Stop during a question would
+ * do nothing at all until the five minutes were up — the loop that reads the
+ * stop flag is exactly the loop this is blocking.
+ */
+function askPersonOf({ space, say, i }) {
+  return ({ question }) => new Promise((resolve) => {
+    const org = space.org;
+    // A question already waiting cannot happen — one run at a time — but if it
+    // somehow did, it is answered with nothing rather than left hanging.
+    questions.get(org)?.resolve(null);
+    let done = false;
+    const finish = (answer) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer); clearInterval(watch);
+      questions.delete(org);
+      say({ t: 'run.answered', i });
+      resolve(answer);
+    };
+    const timer = setTimeout(() => finish(null), ASK_WALL_MS);
+    const watch = setInterval(() => { if (stopping.has(org)) finish({ giveUp: true, text: 'stopped' }); }, 250);
+    questions.set(org, { question, i, at: Date.now(), resolve: finish });
+    say({ t: 'run.question', i, question });
+  });
+}
+
+/**
+ * Start this run signed out.
+ *
+ * A test that signs up or signs in CHANGES the thing it is testing, and the
+ * browser remembers. Run "test the sign up flow" once and it works; run it
+ * again and the site greets you with Dashboard and Continue learning, there is
+ * no sign-up control anywhere on the page, and the runner correctly reports
+ * that it cannot do what it was asked. The test did not break. The session it
+ * created broke the test.
+ *
+ * Replays have always had this problem and mostly got away with it, because a
+ * recorded click on a control that is no longer there fails with a sentence
+ * about the control. A goal says the truthful thing — "no sign up control is
+ * available on this page" — which is more useful and just as stuck.
+ *
+ * So: cookies for the site under test, cleared before the first step. Scoped
+ * to that host rather than the whole context, because the context is shared —
+ * signing somebody out of every other site to run one test would be a cure
+ * worse than the disease.
+ */
+async function clearSite(pg, url, say) {
+  let host;
+  try { host = new URL(url).hostname; } catch { return; }
+  const ctx = pg.context();
+  // Both spellings: a site's own cookies and the dot-prefixed ones it sets for
+  // its subdomains are two different rows as far as the filter is concerned.
+  for (const domain of [host, `.${host}`]) await ctx.clearCookies({ domain }).catch(() => null);
+  say({ t: 'log', level: 'info', msg: `Starting signed out — cleared what ${host} had stored in this browser` });
+}
+
+/**
+ * And what the page kept for itself, which clearing cookies does not touch.
+ *
+ * Half the web keeps its session in `localStorage`, and that is per origin, so
+ * it can only be cleared from a page on that origin — which means after the
+ * first `goto` rather than before it. Anything found is cleared and the page
+ * reloaded, so the first step a test really does happens on a page that has
+ * never met us.
+ */
+async function clearStorage(pg, say) {
+  const had = await pg.evaluate(() => {
+    let n = 0;
+    try { n += localStorage.length; localStorage.clear(); } catch { /* denied on about:blank, and on a page that blocks it */ }
+    try { n += sessionStorage.length; sessionStorage.clear(); } catch { /* the same */ }
+    return n;
+  }).catch(() => 0);
+  if (!had) return;
+  say({ t: 'log', level: 'info', msg: `and the ${had} thing${had === 1 ? '' : 's'} the page itself had stored — reloading` });
+  await pg.reload({ waitUntil: 'domcontentloaded' }).catch(() => null);
+}
+
+/**
+ * What the case recorded for this step, in the shape the agent is offered it.
+ *
+ * Two things, and the second is the fiddly one. The script line is what a
+ * person would read — `click 'Careers' : nth1/link`. The target has to be
+ * matched against the MENU, and a menu entry is `role:name` with no scope
+ * (chat-plan.js menuFrom), while a recorded target may carry one:
+ * `nth1/link:Careers` and `navigation/link:Careers` are both the `link:Careers`
+ * the page offers. Comparing them unstripped would say "that control is gone"
+ * about a control plainly there, and send the agent looking for a replacement
+ * for something that never moved.
+ *
+ * A goal has nothing recorded, by definition.
+ */
+function recordedHint(step) {
+  if (!step || step.op === 'goal') return null;
+  let script = null;
+  try { script = showAction(step); } catch { /* a step with no script form */ }
+  if (!script) return null;
+  const raw = String(step.target ?? '');
+  const colon = raw.indexOf(':');
+  const head = colon < 0 ? raw : raw.slice(0, colon);
+  const role = head.includes('/') ? head.slice(head.lastIndexOf('/') + 1) : head;
+  return {
+    script,
+    op: step.op,
+    // The menu's form, for matching what the agent answers.
+    target: colon < 0 ? null : `${role}:${raw.slice(colon + 1)}`,
+    // And the recorded form, which is the one that actually runs when the
+    // agent picks it (agent.js keepPrecision): `nth1/` and a landmark scope
+    // are the difference between the link in the nav and the one in the
+    // mobile menu that is never visible.
+    full: raw || null,
+  };
+}
+
+/**
+ * Whether this runner can work a step out at all: one key, one resolver, and
+ * the same mode switch the chat reads (§11). Said as a sentence rather than a
+ * boolean, because every place that cannot do it has to tell somebody why.
+ */
+function agentAvailable() {
+  if (CHAT.mode !== 'claude' || !chatResolver) return { on: false, why: 'no model is configured on this runner — a goal needs one, so write the step as the moves it should make' };
+  if (agentBudget.used() >= agentBudget.max) return { on: false, why: `this runner has asked the model ${agentBudget.max} times today (GC_AGENT_AI_MAX_PER_DAY) — the budget rolls at midnight` };
+  return { on: true, why: null };
+}
+
+/**
+ * One step, carried out by working it out rather than by replaying it.
+ *
+ * The step is turned into a GOAL: a `goal` step already is one, and any other
+ * step becomes the sentence the case is read in ("Click the first 'Blog'
+ * link"), which is exactly the instruction a person would give. `agent.js`
+ * then loops — read the page, ask for one move, check it, make it — and every
+ * decision goes out as its own line, so the transcript shows what the runner
+ * chose and not just what it was told.
+ *
+ * Two things never come here, and they are the safety of the whole feature:
+ *
+ *   An assertion. `expect` is the case's verdict on the application, and it
+ *   runs deterministically the way it always has. A model asked whether the
+ *   check it was just working towards now passes has every reason to say yes.
+ *
+ *   A step that types from the vault. Its value is a secret this process will
+ *   not show a model, so there is nothing to work out: it replays exactly.
+ *
+ * With no model, no budget or no answer, the step falls back to being replayed
+ * as recorded and the transcript says so. A `goal` has nothing to fall back to
+ * and fails, with the reason (ops.js goal).
+ */
+async function carryOut(pg, step, ctx, { space, say, i, spend, instructions = '' }) {
+  const goal = step.op === 'goal' ? String(step.text ?? '') : sayAction(step);
+  const line = (ev) => say({ t: 'step.act', i, ...ev });
+  const redact = (s) => redactWith(space.vault, s);
+
+  /**
+   * No model at all: decided here, before anything is read.
+   *
+   * `runGoal` reads the page and THEN asks, which is the right order when
+   * there is something to ask. On a runner with no key there never is, and
+   * paying for a full read — discover, the links, the accessibility snapshot —
+   * once per step to be told so again is how an agentic run on a keyless box
+   * becomes slow enough to look hung. It made `check:startup`'s probe run
+   * time out, which is how it was found.
+   *
+   * A goal has nothing to replay, so it goes on and fails with the reason
+   * (ops.js) rather than being quietly skipped.
+   */
+  const can = agentAvailable();
+  if (!can.on && step.op !== 'goal') {
+    line({ kind: 'note', text: `${can.why} — replaying this step as it was recorded`, level: 'warn' });
+    await OPS[step.op](pg, step, ctx);
+    return;
+  }
+
+  const result = await runGoal({
+    goal,
+    recorded: recordedHint(step),
+    read: async () => ({
+      url: pg.url(),
+      targets: await discover(pg),
+      links: await links(pg).catch(() => []),
+      // The page's own words, for a model that has to tell a confirmation
+      // from a form. Redacted and fenced by agent.js on the way in.
+      snapshot: (await pg.locator('body').ariaSnapshot().catch(() => '')).slice(0, 12_000),
+    }),
+    ask: async ({ url, menu, history, snapshot, recorded }) => {
+      if (!spend()) return null;
+      const text = composeMove({ goal, url, menu, history, snapshot: redact(snapshot), recorded, instructions });
+      return chatResolver.move({ text, menu }).catch(() => null);
+    },
+    act: (move) => OPS[move.op](pg, move, ctx),
+    // Only a run somebody is actually watching may ask them something. A
+    // scheduled sweep at three in the morning has nobody to answer it, and a
+    // question nobody can see is a browser held until it times out.
+    askPerson: ctx.background ? null : askPersonOf({ space, say, i }),
+    say: ({ kind, text, why, level }) => line({ kind, text, why: why ?? null, level: level ?? 'info' }),
+    stopped: () => stopping.has(space.org),
+    redact,
+  });
+
+  if (result.ok) return;
+  // Nobody answered: not a failure of the step, a runner without a mind. A
+  // recorded step still knows what it meant to do, so it does it.
+  if (result.unanswered && step.op !== 'goal') {
+    line({ kind: 'note', text: `${agentAvailable().why ?? 'the model did not answer'} — replaying this step as it was recorded`, level: 'warn' });
+    await OPS[step.op](pg, step, ctx);
+    return;
+  }
+  // Ended because somebody pressed Stop. It still has to throw — the step did
+  // not do what it was for, and pretending otherwise would put a pass on a
+  // step nobody finished — but it says so in those words, and the executor
+  // reads the same flag and records the run as stopped rather than failed.
+  if (result.byStop) throw new Error(`${goal} — stopped before it finished`);
+  throw new Error(`${goal} — ${result.why}`);
+}
+
+/**
  * @param meta which suite and case this plan came from, when it came from one.
  *   A plan typed into the console has no suite; that is a legitimate state and
  *   the history records it as such rather than inventing a home for it.
@@ -2203,6 +3025,11 @@ const vaultFor = (space, ent) => ({
  */
 async function run(plan, meta = {}) {
   const space = meta.space ?? local;
+  // A stop belongs to the run it was pressed on. Clearing it here, before the
+  // first await, is what stops a Stop pressed with nothing running from
+  // silently killing the next run — while a Stop pressed during the wait for
+  // the browser below still lands, because the loop reads the flag after it.
+  stopping.delete(space.org);
   const ent = meta.ent ?? tenancy.entitlements(null);
   // A pooled session (backgroundSession) runs the plan on its own page, so a
   // schedule never takes the console's; without one, this is the console's run.
@@ -2252,8 +3079,49 @@ async function run(plan, meta = {}) {
   const ctx = {
     cursor: bg ? bg.cursor : cursor, emit: say, nav: bg ? bg.nav : nav, onNavigate: bg ? null : publishTargets, pace: paceOf(meta.pace, PACE),
     origins: space.origins, vault: vaultFor(space, ent),
+    // Whether anybody is watching this one. A pooled session is a schedule's,
+    // and a schedule cannot be asked a question (carryOut).
+    background: Boolean(bg),
   };
-  say({ t: 'run.start', total: plan.steps.length, suite: plan.suite, suiteId: meta.suiteId, caseId: meta.caseId, caseName: meta.caseName, ...(meta.scheduled ? { scheduled: true } : {}) });
+
+  /**
+   * How this run decides what to do: `replay` walks the steps as written,
+   * `agentic` works every one of them out against the page it is looking at
+   * (agent.js). A case with a `goal` in it is agentic whatever was asked for —
+   * a goal is a step that has no moves to replay.
+   *
+   * Model calls are capped twice: per run here, and per day by agentBudget.
+   * The per-run cap is the one that matters — a runaway loop is a single run
+   * asking four hundred times, not four hundred runs asking once.
+   */
+  const hasGoal = plan.steps.some((s) => s.op === 'goal');
+  const agentic = meta.mode === 'agentic' || hasGoal;
+  let asked = 0;
+  const spend = () => {
+    if (asked >= AI_MAX_PER_RUN) return false;
+    if (!agentAvailable().on) return false;
+    if (!agentBudget.take()) return false;
+    asked++;
+    return true;
+  };
+  // The seam ops.js `goal` calls, and the same path a worked-out concrete step
+  // takes. `stepIndex` rides on the context so a decision can be reported
+  // under the step it belongs to rather than guessed at by arrival time.
+  ctx.agent = (pg2, step2, c2) => carryOut(pg2, step2, c2, { space, say, i: c2.stepIndex ?? 0, spend, instructions: meta.instructions ?? '' });
+  // The steps ride along so the console can show every row's words from the
+  // start — a step that never runs because the run stopped before it is still
+  // a step. The entry fingerprint and the recorded evidence are left out: they
+  // are the bulky parts, and step.start carries the whole step anyway.
+  say({ t: 'run.start', total: plan.steps.length, steps: plan.steps.map(({ entry, at, via, ...s }) => s), suite: plan.suite, suiteId: meta.suiteId, caseId: meta.caseId, caseName: meta.caseName, mode: agentic ? 'agentic' : 'replay', ...(meta.scheduled ? { scheduled: true } : {}) });
+  // Said once, at the top, rather than discovered by the person when a step
+  // does something the case does not say. An agentic run is a different
+  // promise from a replay and the transcript should open by admitting it.
+  if (agentic) {
+    const can = agentAvailable();
+    say({ t: 'log', level: can.on ? 'info' : 'warn', msg: can.on
+      ? 'Working this one out: the runner reads the page and decides each move itself.'
+      : `Asked for an agentic run, but ${can.why}. Every step it can will replay as recorded.` });
+  }
 
   // Everything from here to the finally must be able to throw without wedging
   // the executor. It used to clear the lock on the happy path only, so a
@@ -2261,26 +3129,52 @@ async function run(plan, meta = {}) {
   // for the life of the process — and from then on every Run was silently
   // refused. "Run script does nothing" with no error in the log is exactly
   // what that looks like from the outside.
+  let stopped = false;
+  // Asked to start from a site that has never met us. The cookies go before
+  // the first step; the page's own storage can only go once there is a page.
+  let toClear = meta.fresh === true;
+  if (toClear) await clearSite(pg, plan.steps.find((s) => s.op === 'goto')?.url, say).catch(() => null);
   try {
     for (const [i, step] of plan.steps.entries()) {
+      // Asked to stop. Read here rather than inside a step, so what the person
+      // sees on the page is a step that finished and a run that did not carry
+      // on — never a half-typed field.
+      if (stopping.has(space.org)) { stopped = true; say({ t: 'log', level: 'warn', msg: 'Stopped — the steps after this one did not run' }); break; }
       say({ t: 'step.start', i, step });
       const t0 = Date.now();
+      ctx.stepIndex = i;
       try {
-        await OPS[step.op](pg, step, ctx);
+        // An agentic run works out every step it is allowed to; `workedOut`
+        // below says which those are and why the rest are not.
+        if (agentic && workedOut(step)) await carryOut(pg, step, ctx, { space, say, i, spend, instructions: meta.instructions ?? '' });
+        else await OPS[step.op](pg, step, ctx);
         results.push({ i, ok: true, ms: Date.now() - t0 });
         say({ t: 'step.pass', i, ms: Date.now() - t0 });
+        // The first page this run opened is the first chance to clear what the
+        // site kept for itself, and the only one worth taking: after this a
+        // step may have signed in on purpose.
+        if (toClear && step.op === 'goto') { toClear = false; await clearStorage(pg, say).catch(() => null); }
       } catch (err) {
         results.push({ i, ok: false, ms: Date.now() - t0, error: err.message });
         say({ t: 'step.fail', i, ms: Date.now() - t0, error: err.message });
         // A step the plan refused is a plan refusal, not a broken page.
         if (err instanceof tenancy.EntitlementError) say({ t: 'refused', of: 'run', ...refusal(err) });
+        // A step that ended because somebody pressed Stop is not a failure of
+        // the site, and the run it was part of has no verdict. The loop's own
+        // check at the top never sees this one — a failed step breaks out
+        // before it — so the stop is read here too, or a run somebody ended
+        // would file a defect against the application for it.
+        if (stopping.has(space.org)) stopped = true;
         break;
       }
       await sleep(120);
     }
 
     const passed = results.filter((r) => r.ok).length;
-    const ok = results.every((r) => r.ok);
+    // A run somebody stopped never passed, whatever the steps it got through
+    // did. Calling it a pass would be the product agreeing that a test it did
+    // not finish is a test that works.
+    const ok = !stopped && results.every((r) => r.ok) && results.length > 0;
     const entry = space.history.record({
       suite: plan.suite,
       suiteId: meta.suiteId ?? null,
@@ -2291,6 +3185,10 @@ async function run(plan, meta = {}) {
       results,
       steps: plan.steps,
       scheduled: meta.scheduled === true,
+      // A case a model drafted and nobody has accepted (runs.js): out of the
+      // summary, never folded into a defect. It is still a real run.
+      draft: meta.draft === true,
+      stopped,
     });
     space.history.prune(ent.limit('history.retention_days'));
     // What this run filed, closed or reopened (defects.js), said in the log as
@@ -2311,8 +3209,10 @@ async function run(plan, meta = {}) {
     } catch (err) {
       say({ t: 'log', level: 'error', msg: `could not file the defect: ${err.message}` });
     }
-    // And a failed run, with the step it stopped on and the defect it went under.
-    if (!ok) {
+    // And a failed run, with the step it stopped on and the defect it went
+    // under. Not one somebody stopped: nobody needs telling about a thing
+    // they just did.
+    if (!ok && !stopped) {
       notify.send(space.org, 'run_failed', { suite: plan.suite, caseName: meta.caseName ?? null, passed, total: results.length, error: entry.error, step: entry.step, doing: entry.target ?? null, defect, scheduled: meta.scheduled === true, page: entry.url, url: entry.url });
     }
     // Same function, same IR — with outcomes folded in, the plan diagram
@@ -2326,14 +3226,21 @@ async function run(plan, meta = {}) {
     if (!bg) await publishTargets();
     // The failing step, so a caller can say where a run stopped without
     // reading the history back (the chat does). This history keeps no target.
-    return { ok, passed, total: results.length, error: entry.error, step: entry.step, target: entry.target ?? null };
+    return { ok, passed, total: results.length, error: entry.error, step: entry.step, target: entry.target ?? null, stopped };
   } finally {
+    // Whoever asked has had their stop. Left set, it would stop the next run
+    // before its first step — a button that silently breaks every run after
+    // the one it was pressed on.
+    stopping.delete(space.org);
+    // And a question this run died under is nobody's to answer now: left
+    // behind, the next run's first question would find one already waiting.
+    questions.get(space.org)?.resolve(null);
     // Clear the lock BEFORE announcing the end. run.end means "you may start
     // another run"; emitting it while still locked makes a caller that runs
     // back-to-back scripts hang on a silently refused second run.
     if (bg) bg.running = false;
     else { running = false; recorder.recording = wasRecording; driver.touch(space.org); armRelease(); }
-    say({ t: 'run.end', ok: results.every((r) => r.ok) && results.length > 0, suiteId: meta.suiteId, caseId: meta.caseId, caseName: meta.caseName });
+    say({ t: 'run.end', ok: !stopped && results.every((r) => r.ok) && results.length > 0, suiteId: meta.suiteId, caseId: meta.caseId, caseName: meta.caseName, ...(stopped ? { stopped: true } : {}) });
   }
 }
 
@@ -2525,6 +3432,19 @@ wss.on('connection', (ws) => {
       tell({ t: 'secrets', secrets: space.vault.reload() });
       return;
     }
+    if (m.t === 'secrets.set' || m.t === 'secrets.remove') {
+      // A value arrives here and goes no further: into the organisation's own
+      // file, never into a log line, a reply or another socket. What comes
+      // back is the list of NAMES, which is all a viewer ever sees.
+      try { tenancy.requireManager(claims); } catch (err) { return refuse(m.t, err); }
+      try {
+        const secrets = m.t === 'secrets.set' ? space.vault.set(m.name, m.value) : space.vault.remove(m.name);
+        tell({ t: 'secrets', secrets });
+        emitTo(space.org, { t: 'log', level: 'info',
+          msg: `vault: $${String(m.name ?? '').replace(/^\$/, '').toUpperCase()} ${m.t === 'secrets.set' ? 'set' : 'removed'}` });
+      } catch (err) { return refuse(m.t, err); }
+      return;
+    }
 
     // The canvas asks for a picture. Frames are damage-driven, so a viewer that
     // arrives while the page is sitting still has nothing to show and no reason
@@ -2661,6 +3581,9 @@ wss.on('connection', (ws) => {
     recording: mine && (recorder?.recording ?? false),
     origins: space.origins.list(),
     org,
+    // The name a person gave this workspace, so the sidebar can draw it
+    // without a second call (workspace.js). A label, not a secret.
+    workspace: space.workspace.describe(),
     driving: driver.describe(org),
     // Whether the monitoring picker is armed on the page: the UI's Pick button
     // follows the runner, never the other way round.
@@ -2681,6 +3604,29 @@ process.on('unhandledRejection', (err) => {
   console.error(`\n  unhandled rejection: ${err?.stack ?? err}\n`);
   try { emit({ t: 'log', level: 'error', msg: `internal error: ${err?.message ?? err}` }); } catch {}
 });
+
+/**
+ * Ready, and not a moment before.
+ *
+ * This used to be set the instant `chromium.launch()` came back, five hundred
+ * lines of module evaluation before `wss.on('connection')` was attached — and
+ * `/healthz` is what everything waits on. A socket opened in that window
+ * UPGRADED, because the upgrade handler is on the HTTP server and was attached
+ * long before, and then sat there: no `ready` greeting, no reply to anything
+ * it sent, because `ws` drops messages nobody is listening for. From the
+ * outside that is a viewer showing "Runner connected" while nothing works.
+ *
+ * It is not a hypothetical. The docker healthcheck, `scripts/deploy.sh` and
+ * `aws-up.sh` all probe `/healthz` and then declare the box up, and the first
+ * person to load the app after a deploy is exactly who lands in the window.
+ * `scripts/check-auth.js` lands in it too, which is how it was found: the
+ * greeting assertion failed with the socket plainly open.
+ *
+ * So readiness now means "everything a client needs is attached", which is
+ * here. The relaunch path above (`newSession`) still clears and re-sets it
+ * around a browser that died, where the handlers are long since in place.
+ */
+browserReady = true;
 
 // ---- schedules: what runs with nobody at the console (schedules.js) -------------------------
 scheduler = new schedules.Scheduler({ fire: fireSchedule, emit: emitTo, log: console }).start();

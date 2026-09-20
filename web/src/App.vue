@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import SideNav from '@/components/SideNav.vue';
 import HelpPanel from '@/components/HelpPanel.vue';
+import RunOverlay from '@/components/RunOverlay.vue';
 import SupportSheet from '@/components/SupportSheet.vue';
 import { useLive } from '@/stores/live';
 import { useSuites } from '@/stores/suites';
@@ -21,7 +22,11 @@ const route = useRoute();
 // account is sent to when it must enrol an authenticator first. Every item
 // in that sidebar needs the runner, and the runner will refuse — a nav full
 // of things that 401 is a broken dashboard, not a sign-in screen.
-const BARE = ['landing', 'login', 'mfa', 'signup', 'verify', 'forgot-password', 'reset-password', 'invite',
+// The first run is bare for a different reason than the account pages, and it
+// is worth saying which: nothing in that sidebar has anything to point at yet.
+// Its first line is the workspace's name, and the workspace has none — which
+// is the entire reason that screen is on the screen.
+const BARE = ['landing', 'welcome', 'login', 'mfa', 'signup', 'verify', 'forgot-password', 'reset-password', 'invite',
               'security-password', 'security-email', 'security-mfa'];
 // `route.name` is undefined until the router has matched something, and
 // `BARE.includes(undefined)` is false — so an unresolved route used to read as
@@ -122,6 +127,11 @@ onBeforeUnmount(() => {
          bar of every page, so they are drawn once here rather than per view. -->
     <HelpPanel v-if="ui.helpOpen" />
     <SupportSheet v-if="ui.supportOpen" />
+    <!-- A run takes the screen wherever it was started from: the suite, the
+         chat, the console. Drawn once here, like the panels above, because a
+         run belongs to the session rather than to the page you happen to be
+         looking at. -->
+    <RunOverlay />
   </div>
   <RouterView v-else />
 </template>

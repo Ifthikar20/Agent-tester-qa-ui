@@ -440,6 +440,48 @@ const INTENTS = [
     return { text: `Scanning "${page.name}" drives the browser and rewrites the page's targets. Say yes to go ahead.` };
   },
 
+  // 12b · how this organisation is set up: what runs on its own, where a
+  // failure is told, what the runner may open, what a step may type. Read
+  // only, and names only — a channel’s address and a vault value never
+  // leave the runner.
+  async ({ q, raw, byName, T }) => {
+    if (!byName?.setup) return null;
+    // A turn carrying an address is about that address — quickstart or the
+    // explorer — never about how this organisation is configured.
+    if (/https?:\/\//.test(raw)) return null;
+    if (!/\b(schedule|scheduled|cadence|nightly|runs on its own|notified?|notification|notify|alert|channel|webhook|slack|allowlist|allowed origins|which origins|vault)\b/.test(q)) return null;
+    const r = await T('setup', {});
+    const f = r.facts;
+    const bits = [];
+    bits.push(f.schedules.length
+      ? `${f.schedules.length} schedule${f.schedules.length === 1 ? '' : 's'}: ${f.schedules.map((s) => `${s.name || s.kind} ${s.when}${s.paused ? ' (paused)' : ''}`).join('; ')}`
+      : 'Nothing runs on its own yet.');
+    bits.push(f.channels.length
+      ? `A failure is told to ${f.channels.length} channel${f.channels.length === 1 ? '' : 's'}: ${f.channels.map((c) => `${c.name || c.kind} (${c.kind}, ${c.events.join(' and ')})`).join('; ')}.`
+      : 'Nobody is told when something fails.');
+    bits.push(f.origins.length ? `The runner may open ${f.origins.join(', ')}.` : 'No origin is allowed yet, so the runner can open nothing.');
+    bits.push(f.vaultKeys.length ? `A step may type ${f.vaultKeys.map((k) => `$${k}`).join(', ')} — the names only; the values stay on the runner.` : 'The vault is empty, so a $KEY in a step would not resolve.');
+    return { text: bits.join(' ') };
+  },
+
+  // 13a · a URL AND something to test on it: research the site first (a
+  // proposal). Before quickstart, because "test the sign-in at example.com"
+  // names a thing to look for and quickstart would only ever read the one
+  // address it was given.
+  async ({ q, raw, byName, T }) => {
+    if (!byName?.explore_site) return null;
+    const m = raw.match(/https?:\/\/\S+/);
+    if (!m) return null;
+    if (!/\b(test|check|verify|try|explore|research|find|look)\b/.test(q)) return null;
+    if (/\bquickstart\b|\bonboard/.test(q)) return null;
+    const url = m[0].replace(/[).,]+$/, '');
+    // What they asked for, with the address taken out: that is the focus.
+    const focus = raw.replace(m[0], ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+    const p = await T('explore_site', { url, focus });
+    if (p.error) return { text: p.error };
+    return { text: `I would open ${url}, walk its own pages without pressing anything, and keep the ones about "${focus}" as a suite. Say yes to go ahead.` };
+  },
+
   // 13 · quickstart a suite from a URL (a proposal)
   async ({ q, raw, T }) => {
     if (!/\bquickstart\b|\bonboard/.test(q) && !/https?:\/\//.test(raw)) return null;

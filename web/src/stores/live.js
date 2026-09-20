@@ -24,6 +24,15 @@ import { api } from '@/api';
 import { useSession } from '@/stores/session';
 import { useChatStore } from '@/stores/chat';
 
+/** How many of the runner's own lines one step keeps, for the overlay's transcript. */
+const SAID_MAX = 12;
+/**
+ * Decisions kept under one step (agent.js bounds a goal at eight moves, and
+ * each can leave a note beside it). Higher than SAID_MAX because these are the
+ * reason somebody is watching an agentic run at all — the log lines around
+ * them are not.
+ */
+const ACTS_MAX = 24;
 const MAX_LOG = 200;
 /** Incidents kept in memory; the runner keeps the same number on disk. */
 const MAX_INCIDENTS = 200;
@@ -49,7 +58,19 @@ export const useLive = defineStore('live', {
     home: null,         // the page last opened on purpose from a view; what Home reopens
     origins: [],
     secrets: [],        // filled by a `secrets` reply, never by the greeting
+    secretError: null,  // why the runner refused a key, for the field that asked
+    saying: null,       // the step index the runner's log lines belong to, while one is running
     org: null,          // which organisation this socket is, as the runner sees it
+    /**
+     * What this workspace is CALLED, from the greeting (workspace.js):
+     * `{ name, owner, named }`. The slug above is a path segment; this is the
+     * words a person chose, and it is what the sidebar draws.
+     *
+     * Null until the first greeting, which is not the same as unnamed — the
+     * router's first-run guard waits for it rather than deciding on a socket
+     * that has not answered yet.
+     */
+    workspace: null,
     /**
      * Who is driving the one browser (docs/AUTH.md §10): `org` is whose page
      * is on it, `held` whether they still hold the lock, `mine` whether it is
@@ -65,7 +86,38 @@ export const useLive = defineStore('live', {
     recordedFlow: '',
     recordedCount: 0,
     // The run in progress, as the steps report themselves.
-    run: null,          // { suite, total, steps: [{i, state, ms, error}] }
+    run: null,          // { suite, total, mode, stopped, steps: [{i, state, ms, error, said, acts}] }
+    /**
+     * A stop has been asked for and the run has not ended yet.
+     *
+     * Its own flag rather than a disabled button, because the gap is real and
+     * worth saying out loud: a step cannot be torn in half, so the runner
+     * finishes the one it is on before it stops (server.js `stopping`). A
+     * button that simply greyed out would leave somebody watching a browser
+     * carry on clicking for another few seconds with no explanation.
+     */
+    stopping: false,
+    /**
+     * The question the run has stopped to ask, while it waits (agent.js).
+     *
+     * `{ i, text }` — the step it belongs to and the words. The run is holding
+     * the browser for as long as this is set, which is why the overlay draws
+     * it where the run is being watched rather than as a notification
+     * somewhere: it is the only thing on screen that matters until it is
+     * answered.
+     */
+    question: null,
+    /**
+     * What the runner is doing while it researches a site and drafts a test
+     * (server.js draftTestOf): `{ goal, lines: [{ key, state, text }] }`.
+     *
+     * A draft holds the browser for the better part of a minute — a walk of up
+     * to twelve pages, then a model call — and the alternative to saying so is
+     * a spinner that looks identical whether it is working or wedged. One line
+     * per stage, rewritten in place as that stage reports, so the box is a
+     * record of what happened rather than a scroll of noise.
+     */
+    draft: null,
     suiteRun: null,     // { suite, cases, done, passed }
     log: [],
     cursor: { x: 0, y: 0 },
@@ -349,6 +401,36 @@ export const useLive = defineStore('live', {
         this.support = { enabled: !!s.enabled, since: s.since ?? null };
       } catch { /* the pill stays off until the runner answers */ }
     },
+    /**
+     * Stop the run in flight.
+     *
+     * The flag goes up here the moment the runner accepts the request, not
+     * when the run ends: those are seconds apart and the person pressing it
+     * deserves to know their press landed. `run.end` clears it.
+     *
+     * A failure to reach the runner is said in the log rather than thrown —
+     * the button that stops a run is the last one that should explode.
+     */
+    async stopRun() {
+      if (!this.running || this.stopping) return;
+      this.stopping = true;
+      try { await api.stopRun(); }
+      catch (e) { this.stopping = false; this.say(`could not stop the run: ${e.message}`, 'error'); }
+    },
+
+    /**
+     * Answer the question the run is holding on.
+     *
+     * The question is cleared by the runner's own `run.answered`, not here: it
+     * is the runner that knows whether the answer arrived in time, and clearing
+     * it optimistically would hide a 409 telling you the question had already
+     * timed out while you were typing.
+     */
+    async answerRun(body) {
+      try { await api.answerRun(body); }
+      catch (e) { this.say(e.message, 'error'); throw e; }
+    },
+
     /** The open incidents alone — the sidebar's dot, right before the page has been visited. */
     async loadOpenIncidents() {
       try {
@@ -359,6 +441,15 @@ export const useLive = defineStore('live', {
     say(msg, level = 'info') {
       this.log.unshift({ id: `${Date.now()}-${Math.random()}`, at: Date.now(), level, msg });
       if (this.log.length > MAX_LOG) this.log.length = MAX_LOG;
+      // A line that arrived while a step was running is something that step
+      // did — the drift warning, a dismissed layer, a scroll, a hint. Kept on
+      // the step as well as in the log, capped so a chatty page cannot grow it
+      // without bound.
+      const i = this.saying;
+      const row = i != null && this.run ? this.run.steps[i] : null;
+      if (row) {
+        row.said = [...(row.said ?? []), { id: `${Date.now()}-${Math.random()}`, level, msg }].slice(-SAID_MAX);
+      }
     },
 
     handle(ev) {
@@ -382,6 +473,7 @@ export const useLive = defineStore('live', {
           // new ticket): its monitors are not ours to show.
           if (this.org && ev.org && this.org !== ev.org) { this.monitors = []; this.incidents = []; this.picked = null; this.monitoring = null; this.home = null; this.compiled = {}; }
           this.org = ev.org ?? null;
+          this.workspace = ev.workspace ?? null;
           if ('picking' in ev) this.picking = !!ev.picking;
           this.back = !!ev.back;
           if (ev.url === null) this.picked = null;
@@ -401,7 +493,7 @@ export const useLive = defineStore('live', {
           if (!ev.mine) { this.url = null; this.targets = []; this.lastFrame = null; this.painted = false; this.running = false; this.picking = false; this.picked = null; this.hover = null; this.pickMiss = null; this.back = false; }
           break;
         case 'origins': this.origins = ev.origins; break;
-        case 'secrets': this.secrets = ev.secrets; break;
+        case 'secrets': this.secrets = ev.secrets; this.secretError = null; break;
         // Cheap and immediate; `targets` carries the same URL but arrives
         // after discovery, which is far too late for an address bar.
         case 'url': this.url = ev.url; break;
@@ -428,6 +520,9 @@ export const useLive = defineStore('live', {
                 : ev.error === 'entitlement' ? null
                   : (ev.error || 'The runner refused to start picking');
           }
+          // A vault key refused for its name or its value is a sentence for
+          // the field that asked, not a toast that outlives the page.
+          if (ev.of === 'secrets.set' || ev.of === 'secrets.remove') this.secretError = ev.error || 'The runner refused that key';
           if (ev.error === 'step_up_required') this.say('Allowing an origin needs a recent sign-in — sign in again, then retry', 'error');
           else if (ev.error === 'entitlement') this.upgrade = { limit: ev.limit, plan: ev.plan, of: ev.of };
           else if (ev.error === 'runner_busy') this.say('Another organisation is driving the runner right now — try again when it is free', 'error');
@@ -472,16 +567,81 @@ export const useLive = defineStore('live', {
           this.running = true;
           this.run = {
             suite: ev.suite, caseName: ev.caseName ?? null, total: ev.total,
-            steps: Array.from({ length: ev.total }, (_, i) => ({ i, state: 'idle', ms: null, error: null })),
+            // How this run is deciding what to do (server.js): `replay` walks
+            // the steps as written, `agentic` works each one out against the
+            // page. The overlay says which, because they are two different
+            // promises and a transcript full of moves nobody wrote would
+            // otherwise look like a bug.
+            mode: ev.mode ?? 'replay',
+            stopped: false,
+            // The words of every step come with the start, so a row the run
+            // never reaches still says what it would have done.
+            steps: Array.from({ length: ev.total }, (_, i) => ({ i, state: 'idle', ms: null, error: null, step: ev.steps?.[i] ?? null, said: [], acts: [] })),
+            at: Date.now(),
           };
+          // Which step the runner's own log lines belong to, so the overlay can
+          // show what a step DID under the step itself rather than in one pile
+          // at the foot of the page. Nothing new crosses the wire: a line is
+          // attributed to whichever step was running when it arrived.
+          this.saying = null;
           break;
-        case 'step.start': if (this.run) this.run.steps[ev.i] = { ...this.run.steps[ev.i], state: 'run', step: ev.step }; break;
-        case 'step.pass':  if (this.run) this.run.steps[ev.i] = { ...this.run.steps[ev.i], state: 'pass', ms: ev.ms }; break;
+        case 'step.start':
+          if (this.run) this.run.steps[ev.i] = { ...this.run.steps[ev.i], state: 'run', step: ev.step, said: [], acts: [] };
+          this.saying = ev.i;
+          break;
+        /**
+         * What the runner DECIDED to do, inside a step it worked out for
+         * itself (agent.js).
+         *
+         * Kept apart from `said`, which is the runner's own log attributed to
+         * whichever step happened to be running. This carries its own `i`, so
+         * a decision lands under the step it belongs to however long the
+         * model took to make it — and a person can tell a move the product
+         * chose from a line it happened to print.
+         */
+        case 'step.act': {
+          const row = this.run?.steps?.[ev.i];
+          if (!row) break;
+          row.acts = [...(row.acts ?? []), {
+            id: `${Date.now()}-${Math.random()}`,
+            kind: ev.kind ?? 'do', text: ev.text ?? '', why: ev.why ?? null, level: ev.level ?? 'info',
+          }].slice(-ACTS_MAX);
+          break;
+        }
+        case 'step.pass':  if (this.run) this.run.steps[ev.i] = { ...this.run.steps[ev.i], state: 'pass', ms: ev.ms }; this.saying = null; break;
         case 'step.fail':
           if (this.run) this.run.steps[ev.i] = { ...this.run.steps[ev.i], state: 'fail', ms: ev.ms, error: ev.error };
+          this.saying = null;
           break;
+        // Drafting a test from a sentence (server.js draftTestOf). One line per
+        // stage, found by key and rewritten, so "Reading /careers — 3 of at
+        // most 12" replaces itself rather than stacking up twelve deep.
+        case 'draft.start': this.draft = { goal: ev.goal, lines: [] }; break;
+        case 'draft.step': {
+          if (!this.draft) this.draft = { goal: '', lines: [] };
+          const at = this.draft.lines.findIndex((l) => l.key === ev.key);
+          const line = { key: ev.key, state: ev.state, text: ev.text };
+          if (at < 0) this.draft.lines.push(line); else this.draft.lines[at] = line;
+          break;
+        }
+        case 'draft.end':
+          if (this.draft) this.draft = { ...this.draft, done: true, ok: ev.ok !== false, error: ev.error ?? null };
+          break;
+
+        case 'run.question': this.question = { i: ev.i, text: ev.question }; break;
+        // Answered, timed out, stopped, or the run died under it — all four
+        // arrive here, because from this side they are the same thing: there
+        // is no longer a question waiting.
+        case 'run.answered': this.question = null; break;
         case 'run.end':
           this.running = false;
+          this.saying = null;
+          this.stopping = false;
+          this.question = null;
+          // A run somebody stopped is neither a pass nor a failure, and the
+          // overlay says so rather than drawing the red it would draw for a
+          // step that broke.
+          if (this.run && ev.stopped) this.run.stopped = true;
           if (this.suiteRun) { this.suiteRun.done++; if (ev.ok) this.suiteRun.passed++; }
           break;
 

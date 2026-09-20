@@ -1,7 +1,9 @@
 <script setup>
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { api } from '@/api';
+import { useSuites } from '@/stores/suites';
 import HeroPanel from '@/components/HeroPanel.vue';
+import ProjectFilter from '@/components/ProjectFilter.vue';
 import TopBar from '@/components/TopBar.vue';
 import { runsSpec } from '@/charts';
 import Chart from '@/components/Chart.vue';
@@ -11,7 +13,38 @@ import EmptyState from '@/components/EmptyState.vue';
 
 const data = ref(null);
 const filter = ref('');
-onMounted(async () => { data.value = await api.runs(); });
+const suites = useSuites();
+
+/**
+ * Which project, or all of them.
+ *
+ * Re-asked of the runner rather than filtered here, because `/api/runs` takes
+ * a suite and does the slice itself (runs.js summary) — and the numbers above
+ * the chart are computed from that slice, so filtering client-side would give
+ * a pass rate for one project under a headline counting every project. One
+ * source for the whole page, chosen by one control.
+ */
+const project = ref(null);
+const loading = ref(true);
+async function load() {
+  loading.value = true;
+  try { data.value = await api.runs(project.value ?? undefined); }
+  finally { loading.value = false; }
+}
+onMounted(async () => {
+  await load();
+  // The chips need the projects and their marks; the store is already the
+  // sidebar's source for both.
+  if (!suites.list.length) suites.loadList().catch(() => null);
+});
+watch(project, load);
+
+/** How many of the last fortnight's runs each project has, for the chips. */
+const perProject = computed(() => {
+  const by = {};
+  for (const s of data.value?.suites ?? []) if (s.suiteId) by[s.suiteId] = (by[s.suiteId] ?? 0) + s.runs;
+  return by;
+});
 
 const when = (t) => {
   const m = Math.round((Date.now() - t) / 60000);
@@ -37,11 +70,25 @@ const match = (rows) => rows.filter((r) => (r.suite ?? '').toLowerCase().include
       </p>
     </HeroPanel>
 
-    <EmptyState v-if="data && !data.totals.runs" title="No runs yet"
+    <!-- Which project, above everything it changes. The numbers, the chart and
+         the table are all one slice of the history, so the control that picks
+         the slice belongs over all three rather than beside the table. -->
+    <ProjectFilter v-if="suites.list.length > 1" v-model="project" :projects="suites.list" :counts="perProject" class="mt-6" />
+
+    <EmptyState v-if="data && !data.totals.runs && !project" title="No runs yet"
                 body="Onboard a suite and run it; the outcomes land here.">
       <RouterLink to="/suites/new" class="rounded-full bg-brand px-4 py-2 text-[13.5px] font-medium text-white hover:bg-brand-deep">
         Onboard a project
       </RouterLink>
+    </EmptyState>
+
+    <!-- A project picked, and nothing of it in the window. Not the same as
+         having no runs at all, so it does not say so — and it offers the way
+         back rather than leaving somebody on an empty page. -->
+    <EmptyState v-else-if="data && !data.totals.runs" title="No runs for this project in the last fortnight"
+                body="Other projects have runs in this window. Run one of this project's tests, or look at everything.">
+      <button type="button" class="rounded-full border border-hairline px-4 py-2 text-[13.5px] hover:border-ink/25"
+              @click="project = null">Show every project</button>
     </EmptyState>
 
     <template v-else-if="data">

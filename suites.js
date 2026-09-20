@@ -29,6 +29,7 @@
  * separately, because allowing an origin is a human act and always has been.
  */
 import { mkdirSync, readdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { normalizeUrl } from './origins.js';
 import { suitesDir } from './org.js';
@@ -56,6 +57,16 @@ function slugify(name) {
 }
 
 // --------------------------------------------------------------- validation
+
+/**
+ * How much a project may tell the runner about itself (`instructions`).
+ *
+ * Four thousand characters is a page of prose, which is enough for the things
+ * a page genuinely cannot say — the cookie banner, the account to use, the
+ * button never to press — and short enough that it rides on every question the
+ * agent asks without becoming most of the question.
+ */
+export const INSTRUCTIONS_MAX = 4000;
 
 const text = (v, field, max) => {
   const s = String(v ?? '').trim();
@@ -138,10 +149,14 @@ export function forOrg(org) {
   // ----------------------------------------------------------------- suites
 
   function list() {
-    return files().map(read).filter(Boolean)
+    return files().map(read).filter(Boolean).map(withUid)
       .map((s) => ({
-        id: s.id, name: s.name, description: s.description, baseUrl: s.baseUrl,
+        id: s.id, uid: s.uid, name: s.name, description: s.description, baseUrl: s.baseUrl,
         origin: originOf(s), pages: s.pages.length, cases: s.cases.length,
+        // A suite made before this field existed has none, and an absent
+        // instruction is an empty one rather than undefined — the settings
+        // page binds a textarea straight to it.
+        instructions: s.instructions ?? '',
         createdAt: s.createdAt, updatedAt: s.updatedAt,
       }))
       .sort((a, b) => (a.name > b.name ? 1 : -1));
@@ -160,11 +175,45 @@ export function forOrg(org) {
    */
   const isId = (id) => /^[a-z0-9-]{1,64}$/.test(String(id));
 
-  function get(id) {
-    if (!isId(id)) throw new NoSuchSuite(id);
-    const s = read(`${id}.json`);
-    if (!s) throw new NoSuchSuite(id);
+  /**
+   * A project has two names, and they do different jobs.
+   *
+   * The SLUG is the handle: the filename, the path segment, the thing you read
+   * in a URL and recognise in a diff. It comes from the project's name, which
+   * makes it readable and makes it a bad identifier — rename "Treasury demo"
+   * to "Treasury" and the slug stays `treasury-demo` for ever, and two
+   * projects called the same thing become `treasury` and `treasury-2`.
+   *
+   * The UID is the identity: one v4 UUID, made once, never derived from
+   * anything and never changed. It is what `Project ID` on the settings page
+   * shows and what an API call should name a project by, because it is the
+   * only one of the two that is still true after somebody renames something.
+   *
+   * Both resolve here, so nothing that already holds a slug breaks. A suite
+   * written before uids existed is given one the first time it is read, and
+   * that is written back — a backfill, once, rather than a migration step
+   * somebody has to remember to run.
+   */
+  function withUid(s) {
+    if (!s || s.uid) return s;
+    s.uid = randomUUID();
+    try { write(s); } catch { /* read-only checkout: it still has one in memory */ }
     return s;
+  }
+
+  function get(id) {
+    const want = String(id ?? '');
+    if (!isId(want)) throw new NoSuchSuite(id);
+    const bySlug = read(`${want}.json`);
+    if (bySlug) return withUid(bySlug);
+    // Not a filename. It may still be a project's own id — the one the
+    // settings page hands out — so look for it before giving up. A scan of one
+    // organisation's own directory, only ever on a miss.
+    for (const f of files()) {
+      const s = read(f);
+      if (s?.uid === want) return s;
+    }
+    throw new NoSuchSuite(id);
   }
 
   function create({ name, baseUrl, description }) {
@@ -176,9 +225,14 @@ export function forOrg(org) {
     if (taken.has(id)) { let i = 2; while (taken.has(`${id}-${i}`)) i++; id = `${id}-${i}`; }
 
     return write({
-      id, name: n,
+      id,
+      // The identity, as against the handle (see `get`). Made once, here.
+      uid: randomUUID(),
+      name: n,
       description: String(description ?? '').trim().slice(0, 400),
       baseUrl: u.href,
+      // What the runner should know before it decides anything here (update).
+      instructions: '',
       pages: [], cases: [],
       createdAt: now(), updatedAt: now(),
     });
@@ -188,12 +242,48 @@ export function forOrg(org) {
     const s = get(id);
     if (patch.name !== undefined) s.name = text(patch.name, 'Suite name', 80);
     if (patch.description !== undefined) s.description = String(patch.description).trim().slice(0, 400);
+    /**
+     * What a person wants the runner to know about this project before it
+     * starts deciding anything (agent.js).
+     *
+     * "Dismiss the cookie banner first." "Never press Delete account." "The
+     * admin user is qa+admin@, and it needs the staff account." Every one of
+     * those is something the page cannot tell an agent and a person can say in
+     * a line, and without somewhere to put it the only place it fits is inside
+     * every goal, repeated.
+     *
+     * A description is for people reading the list; this is for the runner
+     * reading the project, so it is a separate field rather than a longer
+     * description. Capped, and kept exactly as typed — the runner fences it
+     * before a model sees it, and never treats it as page content, because
+     * this is the one text in a run that IS an instruction.
+     */
+    if (patch.instructions !== undefined) s.instructions = String(patch.instructions).slice(0, INSTRUCTIONS_MAX);
+    /**
+     * Moving the project to a different address.
+     *
+     * A project still covers ONE origin; this changes which one, wholesale. It
+     * is the answer to the ordinary thing that happens to a project — it was
+     * pointed at a local server while somebody was setting it up, and now it
+     * should be pointed at the real site.
+     *
+     * Every page has to survive the move, and — this is the half that was
+     * missing — every page has to BE MOVED. `resolvePath` was called for each
+     * one and its answer thrown away, so the check passed and the pages kept
+     * their old absolute urls: a project that said treasury.sh with pages that
+     * still opened localhost. The path is what a page really is; the url is
+     * the path resolved against the base, so it is recomputed here rather than
+     * left to drift.
+     *
+     * Nothing is written unless every page resolves, because `resolvePath`
+     * throws before the assignment below — a move that would strand a page
+     * fails whole, with that page's name in the message.
+     */
     if (patch.baseUrl !== undefined) {
       const u = normalizeUrl(patch.baseUrl);
-      // Moving the base is allowed, but every page has to survive the move —
-      // otherwise you get a suite whose pages point at the old host.
-      for (const p of s.pages) resolvePath(u.href, p.path);
+      const moved = s.pages.map((p) => ({ ...p, url: resolvePath(u.href, p.path).href }));
       s.baseUrl = u.href;
+      s.pages = moved;
     }
     s.updatedAt = now();
     return write(s);

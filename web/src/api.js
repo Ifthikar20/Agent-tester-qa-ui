@@ -127,6 +127,12 @@ export const api = {
   hero:    () => req('/api/hero'),
   siteIcon: (origin) => bytes(`/api/sites/icon?origin=${encodeURIComponent(origin)}`),
 
+  // What this workspace is called, and who set it up (workspace.js). A label
+  // rather than an account: with a control plane the organisation's own name
+  // is what the UI shows, and this is the answer for a runner with none.
+  workspace:    () => req('/api/workspace'),
+  setWorkspace: (body) => req('/api/workspace', { method: 'PATCH', body }),
+
   origins:      () => req('/api/origins'),
   allowOrigin:  (origin) => req('/api/origins', { method: 'POST', body: { origin } }),
   removeOrigin: (origin) => req('/api/origins', { method: 'DELETE', body: { origin } }),
@@ -135,6 +141,19 @@ export const api = {
   cases:       () => req('/api/cases'),
   quickstart:  (url) => req('/api/suites/quickstart', { method: 'POST', body: { url } }),
   suite:       (id) => req(`/api/suites/${id}`),
+  // The suite’s cases as parsed STEPS, for the Tests page: the runner owns the parser.
+  // Each carries its last run, so a row can say "never run" without a second call.
+  suiteTests:  (id) => req(`/api/suites/${id}/tests`),
+  // One test: the same steps, plus the document it is stored as and the runs
+  // it has had. The list cannot afford either of those forty times over.
+  suiteTest:   (id, testId) => req(`/api/suites/${id}/tests/${testId}`),
+  // A test from a sentence: the runner writes it down as a goal and works the
+  // moves out when it runs. No model is called to save one.
+  createTest:  (id, body) => req(`/api/suites/${id}/tests`, { method: 'POST', body }),
+  // The other way: research the site now and write down concrete steps. Holds
+  // the browser while it walks, so the progress arrives on the socket and this
+  // answers when there is a test.
+  draftTest:   (id, body) => req(`/api/suites/${id}/tests/draft`, { method: 'POST', body }),
   createSuite: (body) => req('/api/suites', { method: 'POST', body }),
   updateSuite: (id, body) => req(`/api/suites/${id}`, { method: 'PATCH', body }),
   deleteSuite: (id) => req(`/api/suites/${id}`, { method: 'DELETE' }),
@@ -149,14 +168,28 @@ export const api = {
   updateCase: (id, cid, body) => req(`/api/suites/${id}/cases/${cid}`, { method: 'PATCH', body }),
   removeCase: (id, cid) => req(`/api/suites/${id}/cases/${cid}`, { method: 'DELETE' }),
 
-  runSuite:   (id, caseId, pace) => {
+  runSuite:   (id, caseId, pace, mode, fresh) => {
     const q = new URLSearchParams();
     if (caseId) q.set('case', caseId);
+    // Clear what the site under test has stored in the browser first. Only
+    // when it is asked for: it signs you out of that site.
+    if (fresh) q.set('fresh', '1');
     // Only when it is actually chosen — an absent pace means "the server's
     // default", which is not the same as any number this app could guess.
     if (pace !== undefined) q.set('pace', String(pace));
+    // Only the word that CHANGES anything. A run started from this app works
+    // its steps out by default (server.js), so `replay` is the ask and
+    // sending `agentic` back would be repeating the server's own default in a
+    // second place — which is how the two come to disagree.
+    if (mode === 'replay') q.set('mode', 'replay');
     return req(`/api/suites/${id}/run${q.size ? `?${q}` : ''}`, { method: 'POST' });
   },
+  // Stop the run in flight. It answers as soon as the flag is set; `run.end`
+  // on the socket is what says the run actually ended.
+  stopRun:    () => req('/api/run/stop', { method: 'POST' }),
+  // Answer the question a run stopped to ask (agent.js). `giveUp` is a person
+  // looking at the page and saying no, which is a verdict like any other.
+  answerRun:  (body) => req('/api/run/answer', { method: 'POST', body }),
 
   // Agentic monitoring: the runner's monitors, incidents and screenshot clips.
   // A clip is bytes behind the gate, so it comes back as a Blob (Shot.vue).

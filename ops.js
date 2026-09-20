@@ -1,6 +1,7 @@
 import { sleep } from './cursor.js';
+import { aimAt, aimIn, landing, drift, missMessage, arrivalFailure } from './aim.js';
 import { parseTarget, locate, aliasesFor, discover } from './targets.js';
-import { OP_NAMES, checkAction } from './vocabulary.js';
+import { OP_NAMES, checkAction, showTarget } from './vocabulary.js';
 import { PRIVATE_HOST, forOrg as originsOf } from './origins.js';
 import { forOrg as vaultOf } from './secrets.js';
 import { LOCAL } from './org.js';
@@ -213,10 +214,23 @@ async function landed(page, ctx, timeout = 8000) {
 /** Remember where the navigation counter was, so `landed` can want a newer one. */
 const markNav = (ctx) => { ctx.navMark = ctx.nav?.seq ?? -1; };
 
-function point(box, opts) {
-  const x = box.x + (opts.leftEdge ? Math.min(14, box.width / 2) : box.width / 2);
-  return [x, box.y + box.height / 2];
-}
+/**
+ * What a press records about itself, for the URL check that may follow it
+ * (aim.js arrivalFailure): how it was made, what pixel it landed on and what
+ * was there, and the URL and navigation count at the time.
+ */
+const pressOf = (ctx, page, how, aimed = true) => ({
+  how, on: aimed ? ctx.aimed?.on ?? null : null, x: ctx.cursor.x, y: ctx.cursor.y,
+  urlBefore: page.url(), navSeq: ctx.nav?.seq ?? -1,
+});
+
+/** A target as a sentence names it, its name cut at a word boundary. */
+const brief = (target) => {
+  const i = target.indexOf(':');
+  if (i < 0) return target;
+  const name = target.slice(i + 1);
+  return showTarget(`${target.slice(0, i)}:${name.length > 60 ? `${shorten(name, 60)}…` : name}`);
+};
 
 async function boxOf(el, target) {
   const b = await el.boundingBox();
@@ -229,26 +243,9 @@ function el(page, target, ctx) {
   return locate(page, parseTarget(target, aliasesFor(new URL(page.url()).origin)));
 }
 
-/**
- * Did we end up anywhere near where the human clicked?
- *
- * The recorded point is NOT how the element is found — resolving it by name is
- * what survives a layout change. But it is evidence, and it is the only thing
- * that catches a target which resolves cleanly to the wrong element: the name
- * matched, one node came back, and it sits nowhere near where you pointed.
- */
-function drift(at, box, viewport) {
-  if (!at || !viewport) return null;
-  // Scale for a different window than the one it was recorded in.
-  const sx = viewport.width / (at.vw || viewport.width);
-  const sy = viewport.height / (at.vh || viewport.height);
-  const px = at.x * sx, py = at.y * sy;
-  const inside = px >= box.x && px <= box.x + box.width && py >= box.y && py <= box.y + box.height;
-  if (inside) return null;
-  const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
-  return { px: Math.round(px), py: Math.round(py), cx: Math.round(cx), cy: Math.round(cy),
-           dist: Math.round(Math.hypot(cx - px, cy - py)) };
-}
+// Where a press is aimed, and whether the pixel reaches the element, is
+// aim.js: `drift` (did we end up near where the human clicked?) lives there
+// too, beside the geometry it reads.
 
 const nameOfTarget = (t) => t.slice(t.indexOf(':') + 1);
 
@@ -371,15 +368,19 @@ async function pointAt(page, target, ctx, opts = {}) {
   }
   await node.scrollIntoViewIfNeeded();
 
+  const view = page.viewportSize();
   const box0 = await boxOf(node, target);
-  const d = drift(opts.at, box0, page.viewportSize());
+  // Which of the element's boxes to press, and where in it (aim.js): the
+  // centre of a wrapped link's union box is the gap between its lines.
+  const aim = await aimAt(node, box0, opts, view);
+  const d = drift(opts.at, aim, view);
   if (d && ctx.emit) {
     ctx.emit({ t: 'log', level: 'warn',
       msg: `${target}: recorded at ${d.px},${d.py} but resolves to ${d.cx},${d.cy} — ${d.dist}px away. ` +
            `Fine if the layout moved; suspicious if it did not.` });
   }
 
-  const [x, y] = point(box0, opts);
+  const { x, y, rect } = aim;
 
   // Enter the box at the point nearest the cursor, THEN settle to the aim
   // point. A straight line from a menu trigger to an item below it cuts the
@@ -388,13 +389,13 @@ async function pointAt(page, target, ctx, opts = {}) {
   // legs stay inside, and it reads as an approach rather than a lunge.
   const inset = 4;
   const outside =
-    ctx.cursor.x < box0.x || ctx.cursor.x > box0.x + box0.width ||
-    ctx.cursor.y < box0.y || ctx.cursor.y > box0.y + box0.height;
+    ctx.cursor.x < rect.x || ctx.cursor.x > rect.x + rect.width ||
+    ctx.cursor.y < rect.y || ctx.cursor.y > rect.y + rect.height;
   const pace = paceOf(opts.ms, ctx.pace ?? PACE);
   const perf = performanceAt(pace);
   if (outside) {
-    const ex = Math.min(Math.max(ctx.cursor.x, box0.x + inset), box0.x + box0.width - inset);
-    const ey = Math.min(Math.max(ctx.cursor.y, box0.y + inset), box0.y + box0.height - inset);
+    const ex = Math.min(Math.max(ctx.cursor.x, rect.x + inset), rect.x + rect.width - inset);
+    const ey = Math.min(Math.max(ctx.cursor.y, rect.y + inset), rect.y + rect.height - inset);
     await ctx.cursor.glideTo(ex, ey, perf.approach);
   }
   await ctx.cursor.glideTo(x, y, outside ? perf.aim : pace);
@@ -405,13 +406,30 @@ async function pointAt(page, target, ctx, opts = {}) {
   // This one runs at pace 0 too, as a plain move: it is not decoration, it is
   // the difference between clicking the element and clicking where it used to
   // be.
-  const [x2, y2] = point(await boxOf(node, target), opts);
-  if (Math.hypot(x2 - ctx.cursor.x, y2 - ctx.cursor.y) > 2) {
-    await ctx.cursor.glideTo(x2, y2, perf.correct);
+  const aim2 = await aimAt(node, await boxOf(node, target), opts, view);
+  if (Math.hypot(aim2.x - ctx.cursor.x, aim2.y - ctx.cursor.y) > 2) {
+    await ctx.cursor.glideTo(aim2.x, aim2.y, perf.correct);
   }
 
   const linger = perf.linger;          // let hover settle, and the eye catch up
   if (linger > 0) await sleep(linger);
+
+  // The last thing before the press: does the pixel under the cursor reach the
+  // element? A wrapped link's other line is tried before giving up — and giving
+  // up is the point: a press that misses reports success, and the case fails
+  // later with the wrong sentence.
+  let hit = await landing(node, aim2.box, ctx.cursor.x, ctx.cursor.y).catch(() => null);
+  if (hit && !hit.ok) {
+    const tried = [[ctx.cursor.x, ctx.cursor.y]];
+    for (const r of aim2.rects.filter((o) => o !== aim2.rect).slice(0, 5)) {
+      const [rx, ry] = aimIn(r, opts);
+      const h = await landing(node, aim2.box, rx, ry).catch(() => null);
+      if (h?.ok) { await ctx.cursor.glideTo(rx, ry, perf.correct); hit = h; break; }
+      tried.push([rx, ry]);
+    }
+    if (!hit.ok) throw new Error(missMessage(target, hit, tried));
+  }
+  ctx.aimed = { target, x: ctx.cursor.x, y: ctx.cursor.y, on: hit?.ok ? hit.on : null };
   return node;
 }
 
@@ -428,6 +446,7 @@ export const OPS = {
   async goto(page, step, ctx) {
     checkUrl(step.url, ctx.origins ?? originsOf(LOCAL));   // re-checked at run time, not just at validate
     markNav(ctx);
+    ctx.lastPress = null;         // a fresh page: nothing has been pressed on it
 
     // A goto to the URL already on screen does NOT reload — Chrome treats it as
     // a same-document navigation. So without this a run inherits whatever the
@@ -508,6 +527,7 @@ export const OPS = {
   async click(page, step, ctx) {
     await pointAt(page, step.target, ctx, { at: step.at, timeout: step.timeout });
     markNav(ctx);                 // anything after this must be a NEW navigation
+    ctx.lastPress = pressOf(ctx, page, `clicking ${brief(step.target)}`);
     await ctx.cursor.click(performanceAt(ctx.pace ?? PACE).press);
     // A click starts a route change, a fetch and a re-render. Begin the next
     // step when the page has stopped moving, not a fixed moment later.
@@ -581,6 +601,7 @@ export const OPS = {
       await ctx.cursor.click(performanceAt(ctx.pace ?? PACE).press);
     }
     markNav(ctx);
+    ctx.lastPress = pressOf(ctx, page, step.target ? `pressing ${step.key} on ${brief(step.target)}` : `pressing ${step.key}`, Boolean(step.target));
     await page.keyboard.press(step.key);
     await settle(page, step.settle);
   },
@@ -606,12 +627,9 @@ export const OPS = {
         if (Date.now() > deadline) {
           // Say what IS true. "Timeout 8000ms exceeded" sends you to read the
           // wrong three files; the current URL usually names the real problem
-          // in one line.
-          const same = seen === (step.from ?? seen);
-          throw new Error(
-            `expected the URL to contain "${step.value}", but it is "${seen}"` +
-            (same ? ' — the step before this one did not navigate anywhere' : '')
-          );
+          // in one line — and the press before this check knows whether the
+          // page moved at all, and what its pixel landed on (aim.js).
+          throw new Error(arrivalFailure(step.value, seen, ctx.lastPress ?? null, ctx.nav?.summary?.() ?? null, step.timeout ?? TIMEOUT));
         }
         await sleep(100);
         seen = page.url();
@@ -698,6 +716,26 @@ export const OPS = {
 
   async wait(page, step) {
     await sleep(Math.min(step.ms ?? 500, 5000));
+  },
+
+  /**
+   * A goal: what to achieve, with the moves worked out at run time.
+   *
+   * This file is the primitive layer — a verb here is a thing the browser does
+   * and nothing else. Working out WHICH moves a sentence comes to means
+   * reading the page, asking a model and checking its answer, which is a
+   * model call, a budget and an organisation's consent: none of that belongs
+   * beside `page.keyboard.type`. So the executor hands the agent in on the
+   * context (server.js) and this verb is the seam.
+   *
+   * With no agent on the context the step fails, and says which of the
+   * reasons it was. It does not quietly do nothing and pass: a goal that
+   * nobody carried out is not a goal that was met, and a green run that
+   * skipped half the test is the single worst thing this product could do.
+   */
+  async goal(page, step, ctx) {
+    if (!ctx.agent) throw new Error(`"${step.text}" is a goal, and this run has no agent to work it out — turn on agentic runs for this organisation, or write the step as the moves it should make`);
+    await ctx.agent(page, step, ctx);
   },
 };
 

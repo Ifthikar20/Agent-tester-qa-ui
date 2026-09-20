@@ -389,7 +389,42 @@ nodes are places whose shape is the assertion, edge labels are the actions), and
 and the executor never learns which was typed. Every verb is one row in `vocabulary.js`, the
 pure module the extension and the UI hold a copy of: the IR it produces, its syntax, how it is
 written back, how it is drawn, what makes it valid. `ops.js` attaches the `run` half to that
-table by name and refuses to load if the two sets differ.
+table by name and refuses to load if the two sets differ. The table carries a
+`LANGUAGE_VERSION` (4), and `npm run check:shared` pins byte-identical copies into the extension
+and the Vue app.
+
+**A step that says what to achieve.** One verb, `goal`, carries a sentence of at most 120
+characters instead of an element and a move — `goal 'sign in as the demo student'`. It is the one
+step whose moves are worked out at run time (§11.1), which is what lets a test survive the page
+being redesigned, and it does not widen the action space: a goal is expanded into these same
+verbs, against elements that are on the page, through this same `validate()`. Its text may not
+carry a quote, a pipe, a semicolon or a newline, because the document format uses them.
+
+**Three ways to get a test, differing in when the thinking happens.** Record one (§7). Write the
+sentence down as a `goal` and let the runner work the moves out on every run (`POST
+/api/suites/:id/tests`). Or research the site once, now, and write concrete steps you can read
+before you trust them: `POST /api/suites/:id/tests/draft` walks the site with `explore.js` — by
+address only, pressing nothing — picks the page the request scored highest on, drafts one
+candidate through `chat-plan.js planPageOf`, and saves it. It holds the browser for the length of
+a walk and a draft, so it reports as it goes on the socket (`draft.start`, `draft.step` keyed by
+stage, `draft.end`) and the prompt draws those lines in place of its form. No new machinery: the
+same walk and the same compile the chat has always used, reached from a press on the Tests page
+instead of from four approvals in a conversation.
+
+`POST /api/suites/:id/tests` is how a goal-shaped one gets written: a sentence and an optional check become
+`goto` the suite's address, `goal`, and `expect textVisible`, rendered with `toFlow` and read back
+through the real validator before anything is saved. No model is called — this route writes a
+document. It is what the Tests page's "Add test" does, and it exists because the other route from
+words to a test is the chat, which researches the site and asks for four approvals before
+anything runs (§10). That is the right shape when you want to read the steps before you trust
+them; it is a crawl and four presses when somebody typed "test the sign-up flow", and the
+finding-the-page part is now something the runner can do when it runs.
+
+A test made this way has one honest limitation, and the UI states it rather than hiding it: with
+no check it passes when the runner could carry its goals out, which is a weaker claim than a
+verdict about the application. With a check, the check is the verdict — on the first real one of
+these, the agent reported "account was created and onboarding page reached, so the sign up flow is
+verified" and the case's own `see` failed on the next line, which is the arrangement working.
 
 **The security model is subtractive.** There is no `evaluate` and no raw-selector op. A target
 (`targets.js`) is parsed into one of a fixed set of semantic strategies (`button:Sign in`,
@@ -439,6 +474,30 @@ failure is explained by Turnstile when a Turnstile frame is on the page (`turnst
 the model when fixes are on and no fix may change the step. Everything to the `finally` can throw
 without wedging the executor.
 
+**Stopping.** A step is a browser call already in flight and cannot be torn in half, so Stop is
+read BETWEEN steps: `POST /api/run/stop` adds the organisation to a `stopping` set, the loop reads
+it before each step, and `run()` clears it before its own first step so a stop nobody needed
+cannot poison the next run. A stopped run carries **no verdict** — `runs.js` marks the row
+`stopped`, which keeps it out of the dashboard's numbers, out of a test's history and out of
+`defects.js`, because half a run is not evidence about the site. A suite run stops with the case,
+not after it.
+
+**Two ways to decide what to do (`?mode=`).** `agentic` works each step out against the page it is
+looking at, through `agent.js` (§11.1), and it is **the default for a run somebody starts** —
+`POST /api/suites/:id/run` is agentic unless it is passed `?mode=replay`. A recorded click is a
+name and a point on a page that has since been redesigned, and replaying it produces runs that
+fail with true sentences about the test and nothing about the site. `replay` stays one tick away
+("Replay exactly" on a test's page), because it is exact, instant and free, which is what you want
+when you are pinning down a regression. `runCasesOf` itself still defaults to `replay`, so
+scheduled work stays deterministic and costs nothing.
+
+Four kinds of step are replayed exactly however agentic the run is, and each exclusion is a
+property that would otherwise be lost: `expect`, because the case's verdict on the application is
+not a model's to give; `goto`, because where the browser goes is the case's decision and the
+allowlist's; `wait`, because there is nothing to work out; and any step with a `valueRef`, because
+its value is a secret this process does not show a model. A case holding a `goal` step is agentic
+whatever was asked for — a goal has no recorded moves to replay.
+
 Around the loop:
 
 - `cursor.js`: `VirtualCursor` owns the pointer. Every move injects a real `mouseMoved` over CDP
@@ -451,8 +510,24 @@ Around the loop:
 - `diagram.js`: the same IR drawn as mermaid `block-beta`, once as the plan and once with outcomes
   as the report. `domwatch.js` re-reads the targets when the page changes shape without
   navigating.
-- `suites.js`: a suite is the onboarding unit, one origin fixed at creation, pages beneath it with
-  expectations, cases recorded against them, one organisation, an unguessable id.
+- `workspace.js`: what the tenant is CALLED. Every store here is keyed by the organisation slug,
+  which is a path segment; this is the words a person gave it, kept per organisation in
+  `.ghostclick/<org>/workspace.json` and served on `/api/state` and in the socket greeting. Two
+  sources and the real one wins: with a control plane the organisation's own name is what the UI
+  shows, and this is the answer for a runner that has nobody to ask. `owner` is who set it up in
+  their own words — not an account, because a runner with no control plane has none, and minting a
+  fake identity would be worse than recording a preference. Unnamed is a real state (`named`), and
+  it is what sends a first arrival to `/welcome`.
+- `suites.js`: a suite is the onboarding unit, one origin, pages beneath it with
+  expectations, cases recorded against them, one organisation. It carries TWO names and they do
+  different jobs: the **slug** is the handle — the filename, the path segment, readable in a URL
+  and in a diff — and the **uid** is the identity, one v4 UUID made at creation and never derived
+  from anything, which is what `Project ID` shows and what an API call should name a project by.
+  `get()` resolves either, so nothing holding a slug breaks and a project can be renamed without
+  orphaning anything; a suite written before uids were added is given one the first time it is
+  read. Moving a project to another address is allowed and moves every page with it, keeping their
+  paths — the check that each one survives and the rewrite that moves it are the same pass, so a
+  move that would strand a page fails whole.
   `POST /api/suites/quickstart` makes one from a URL; a page's `check` is `pageCheckFlow`, a case
   written from its expectations.
 - `runs.js`: every finished run appended; `runs.per_day` and `history.retention_days` are counted
@@ -609,20 +684,40 @@ flowchart LR
    document, and `measurePage` (core.js) reports its blocks instead of one element's numbers:
    every readable piece of text (headings, paragraphs, list items, links, buttons, cells, labels,
    a field's placeholder, an image's alt) and the boxes that arrange them (nav, main, sections,
-   forms, tables), each keyed by its place in the tree with its box in document coordinates
-   (viewport ones for a fixed or sticky block) and a hash of its words, capped at 400. The
-   signature changes only when a block appears, goes, moves by the 4px grid or says something
-   else. `compilePageRule` (monitor-rules.js) reads the rule as one of three things — the layout,
-   the words, or both — with an optional pixel tolerance, into a spec of `kind: 'page'`; a sentence
-   it cannot place becomes a judgment clause over both. `diffPage` (monitor-evaluate.js) answers
-   it: what was added, removed, moved or resized past the tolerance, or reworded, as exact totals
-   and capped samples, which is the incident's `diff.pageChanges` and the verdict's sentence. Two
-   things keep it quiet: at creation the engine reads the page three more times over a second and
-   a half and learns the blocks that changed with nobody touching it (`changedKeys`) into the
-   spec's `ignore`; and after a visit a page monitor's every verdict, not only "missing", waits
-   out `ARM_GRACE_MS` for blocks that arrive late. A snapshot at another viewport width is skipped,
-   not failed. The store keeps the blocks; `compactSnapshot` leaves them out of the API and the
-   events, which carry the count.
+   forms, tables), each keyed by its place in the tree with its box in **document coordinates
+   through every scroller on the way up** — the ancestors' `scrollTop`/`scrollLeft` summed to the
+   window's, so a page that scrolls an inner `main` under a fixed header reads the same at any
+   scroll; viewport ones for a fixed or sticky block — a hash of its words, a hash of what it
+   does (`lh`: a link's host, path and query, a form's action and method, a control's type, name
+   and disabled state, a role's expanded/pressed/checked state; masked words `lp` beside it for a
+   sentence, never the address), `c` on a control and `p` the block it sits in, capped at 400;
+   `env.scroll` is the main scroller's offset. The signature changes only when a block appears,
+   goes, moves by the 4px grid, says or does something else. `compilePageRule` (monitor-rules.js)
+   reads the rule into a spec of `kind: 'page'` over five questions — `logic`, `elements`,
+   `content`, `layout`, `alignment` — asking the ones the rule names or, with none named, the four
+   a whole-page watch stands for (everything but the layout: a pure re-flow is not a change), with
+   an optional pixel tolerance; a sentence it cannot place becomes a judgment clause. `diffPage`
+   (monitor-evaluate.js) answers it: first a **uniform shift** of every free block with nothing
+   added, removed or resized is taken out as `scrolled` (the second line of defence, for a
+   smooth-scroll library that moves a wrapper with a transform); then what was re-pointed, added,
+   removed, renamed, reworded, moved past the tolerance or newly overlapping (never a block and one
+   it sits in, by the `p` chain), as booleans, exact `totals` and capped samples — the incident's
+   `diff.pageChanges` and the verdict's sentence. A reading at **another viewport width** is
+   anticipated: `viewport` says what is hidden, only `logic` and `content` are judged, and the
+   second reading at that width (one is a window being dragged) is kept as the width's own
+   baseline in `m.baselines[width]` — after one verdict from Claude when there is a key: a "no"
+   keeps it, a "yes" opens an incident in Claude's words and holds the width strictly (every
+   category counts) until somebody resolves it. Readings at a kept width are judged against it
+   with every category, and a manual resolve there moves that width's baseline, not the creation
+   one. Claude's `violation: false` on any incident — a scroll, a re-flow, a frame the arithmetic
+   could not tell from a change — resolves it by the judge, re-baselines and closes its defect
+   (`runJudge`), not only on a judged clause. Two things keep it quiet: at creation the engine
+   reads the page three more times over a second and a half and learns the blocks that changed
+   with nobody touching it (`changedKeys`) into the spec's `ignore`; and after a visit a page
+   monitor's every verdict, not only "missing", waits out `ARM_GRACE_MS` for blocks that arrive
+   late. The store keeps the blocks; `compactSnapshot` leaves them out of the API and the events
+   (`baselines` too), which carry the count, and `monitor.tick` and the card's `metrics` carry
+   `scrolled` and `viewport` so a card can say what was forgiven.
 
 ```mermaid
 stateDiagram-v2
@@ -765,7 +860,8 @@ Three layers may call a model, through three resolvers of the same shape:
 |---|---|---|---|
 | fixes and recording notes | `resolver.js` | `decide` (one move from a menu), `understand` (what did this step do) | a closed JSON schema |
 | monitoring | `monitor-resolver.js` | `compile` (a rule → a CheckSpec), `judge` (an incident → a verdict) | closed JSON schemas |
-| the chat | `chat-resolver.js` | `answer` (a conversation, with tools) | prose, structure in the tools |
+| the chat | `chat-resolver.js` | `answer` (a conversation, with tools), `draft`/`revise` (a page → cases) | prose; closed schemas for the two structured ones |
+| a run working itself out | `chat-resolver.js` | `move` (this goal, this page → the next move, or done, or stuck) | a closed JSON schema |
 
 Each request is `claude-opus-5` with low effort (medium for the judge), one frozen system block
 with `cache_control` so every call after the first reads it from cache and nothing per-run in it,
@@ -787,10 +883,81 @@ system prompt says, in so many words, that the block is evidence and never instr
 that, it goes through the organisation's vault redactor (`redact.js`), the same function the
 page's console lines and the monitoring snapshots pass through.
 
-**Budgets.** Fixes: calls per run and per day (`GC_HEAL_AI_MAX_CALLS`). Monitoring and the chat
-each have a daily budget of the same shape (`createBudget`, counted in memory, rolled at local
-midnight; `GC_MONITOR_AI_MAX_PER_DAY` and `GC_CHAT_AI_MAX_PER_DAY`, 200 by default), and a
-**Compile with Claude** press takes from monitoring's. Spent, the mock answers.
+**Budgets.** Fixes: calls per run and per day (`GC_HEAL_AI_MAX_CALLS`). Monitoring, the chat and
+an agentic run each have a daily budget of the same shape (`createBudget`, counted in memory,
+rolled at local midnight; `GC_MONITOR_AI_MAX_PER_DAY`, `GC_CHAT_AI_MAX_PER_DAY` and
+`GC_AGENT_AI_MAX_PER_DAY`, 200/200/400), and a **Compile with Claude** press takes from
+monitoring's. Spent, the mock answers. A run has a second cap the others do not, per run rather
+than per day (`agent.js AI_MAX_PER_RUN`, 40): a runaway loop is one run asking four hundred
+times, not four hundred runs asking once.
+
+### 11.1 A run that works itself out (`agent.js`)
+
+A `goal` step (§6) carries a sentence instead of a move — "sign in as the demo student" — and an
+agentic run treats every other step it is allowed to as one too, using the sentence the case is
+read in. `runGoal()` then loops: read the page (`discover` + `links` + the aria snapshot), build
+the menu with `chat-plan.js menuFrom`, ask for ONE move against a closed schema, map it, check it,
+make it through the same `OPS[step.op]` a written step uses, and report it as `step.act` on the
+socket. It is bounded four ways — sixteen moves a goal, sixty calls a run, a hundred and fifty
+seconds a goal, and the Stop somebody can press. (The move cap was eight, which turned the first
+real goal anybody wrote — "test the sign up flow" — into a red row after the runner had already
+created the account and reached the onboarding page: a cap that fails a working run is worse than
+no cap.)
+
+What keeps it inside the subtractive security model (§6) is what the schema does **not** have.
+`target` is an enum built from the page a moment ago, so no element that is not there can be
+named. There is no `goto`, so it cannot navigate. There is no `expect`, so it cannot return a
+verdict — the case's own assertions do that, deterministically, as they always have. There is no
+vault field, and a literal value matching `/pass|secret|token/i` is dropped by the mapper. And a
+move onto a control whose name matches `harmful.js` is refused unless the goal's own words ask for
+it: a test that says "sign out and check the landing page is back" may press Sign out; one that
+says "check the dashboard loads" may not. That is the run-time answer to the rule `explore.js`
+states — a crawler that presses buttons to see what they do eventually presses Delete account.
+
+**What the recording is still worth.** A step that was recorded hands the agent three things the
+sentence alone does not. Its script line goes into the question as a hint — use it if it still
+fits. Its target joins the menu even when `discover()` did not find it, because a recorded target
+may be `text:Turbo AI on Business Insider`, which is words on a page rather than a control, and a
+menu of controls has no word for it; it is the case's own target, already through `validate()`,
+not one a model invented. And when the answer names the same control, the recorded target goes
+back on *with its scope* — `nth1/link:Blog` rather than `link:Blog`, because sites have a Blog
+link in the nav and another in a mobile menu that is never visible, and the menu is `role:name`
+with nowhere to put the difference. What never comes back is the recorded POSITION: a press aimed
+at where an element used to be is the failure this mode exists to get past.
+
+**Not the same move twice.** Told three times that a press could not land, a model will press
+again. A move that failed is refused until something else has worked — which still allows the
+sequence the runner's own error asks for, press, scroll it into view, press again, and stops the
+loop that is not going anywhere.
+
+**What the project says about itself.** A suite carries `instructions` (suites.js, 4000
+characters, edited under `/suites/:id/settings`): what the runner should know here before it
+decides anything — which account to use, a banner to dismiss first, a button never to press.
+Things the page cannot tell an agent and a goal should not have to repeat. It rides on every
+question `composeMove` asks, and it sits **above** the untrusted block rather than inside it,
+because it is the one text in a run that is genuinely an instruction: a person typed it into this
+product about their own project. It is fenced all the same, so `<<<` in anybody's prose cannot
+close the page evidence below it.
+
+**A blocker a person can clear is a question, not a failure.** The fourth answer a move may give
+is `ask`: the run holds — browser, page and all, because an answer is only worth anything about
+the page it was asked on — and `run.question` puts it in the overlay under the step that asked.
+`POST /api/run/answer` carries a sentence, which joins the history so the next move is made
+knowing it, or `giveUp`, which is a person looking at the page and saying no and fails the step in
+their words. Five minutes of silence ends it too, and Stop is watched throughout, or pressing it
+during a question would do nothing until the timeout. Bounded at two questions a goal, and offered
+only to a run somebody is watching — a schedule has nobody to answer, so for it a question is
+simply being stuck. The waiting is not charged to the goal's wall clock: that clock is there to
+end a loop going nowhere, and a person reading a question is not one.
+
+This is what the first real agentic test needed. It filled a sign-up form correctly, was told the
+address was already registered, and had no way through; one sentence — "use
+qa.turbo.20260920a@example.com" — turned a red row into a finished step.
+
+Never throws, like the other three: no key, no budget or no answer means a recorded step replays
+as recorded with a line in the transcript saying so, and a `goal`, which has nothing to replay,
+fails with the reason. `scripts/check-agent.js` drives the whole loop with a literal page and a
+scripted model, including the answers a model that had ignored its instructions would give.
 
 ---
 
@@ -803,13 +970,17 @@ midnight; `GC_MONITOR_AI_MAX_PER_DAY` and `GC_CHAT_AI_MAX_PER_DAY`, 200 by defau
 | `main.js`, `router.js` | app, router, Pinia; every view lazy except the console; the guards that send an unverified address to `/verify`, an MFA flow to `/login/mfa`, a must-change password to `/security/password` |
 | `config.js` | where the backend and the control plane are (`VITE_API_URL`, `VITE_AUTH_URL`; empty means here, and no control plane means no login at all) |
 | `api.js` | the HTTP surface, one function per route; a non-2xx becomes an error carrying the server's own words, with `needsOrigin`, `runner_busy`, `step_up_required`, `forbidden`, `entitlement`, `chat_busy` and `switched_off` named so a view can offer the right button, and `err.body` for the refusals that carry a spec |
+| `components/SideNav.vue` | two views of one sidebar: the workspace's projects, or — once one is open — that project's own sections behind a back row (overview, tests, runs, pages, cases, **console**, monitoring, settings), with what is genuinely the workspace's (run history, defects, the admin pages) below either. The console is a project's because it is a browser pointed at ONE site; the nav row scopes it with `?suite=` and no `?url=`, so it does not drive anywhere. The rail keeps the project list at both, because 64px has no room for sections |
+| `components/StepFlow.vue`, `components/RunOverlay.vue` | a case as a numbered spine of step cards with its kind badge, drawn once for a plan and again with a run's outcomes on it; and the run itself over the whole screen — the transcript, the agent's decisions nested under the step that made them, the driven page, and Stop |
 | `stores/live.js` | the one WebSocket: mints a ticket, reconnects with backoff, hands frames to the console's canvas (keeping the last one so an idle page is never a black canvas), and folds every event into state: steps, log, targets, origins, monitors, incidents, the lock, the chat's events |
 | `stores/session.js` | who you are: the HttpOnly session cookie to Django, and the executor token held in memory and renewed with a minute to spare, sent as a Bearer header and never in a URL |
 | `stores/suites.js`, `stores/chat.js`, `stores/ui.js` | suites cached and refreshed after every write; the transcript cache and the reply being written; how the shell is arranged, per viewer |
+| `components/ProjectFilter.vue` | which project, on the two pages that span all of them. Run history and Defects are deliberately workspace-wide — "what is broken" is a question about everything you own — so both carry a row of projects, drawn by their own marks (`SiteIcon`) with a count each. Run history re-asks the runner (`/api/runs?suite=`) because the tiles are computed from that slice; Defects narrows what it holds, matching on the `suites` a defect was seen in, and keeps the choice in `?project=` so a filtered list is a link |
+| `tests.js` | the test library's pure half: which rows a search keeps, what "failing" means, a step's kind (Go / Act / Check / Wait / Goal — derived from the IR, never stored), and how a last run reads |
 | `monitoring.js`, `defects.js`, `lang/vocabulary.js`, `icons/`, `webauthn.js`, `composables/reauth.js` | the monitoring chips and pills; how a defect reads on a row and in its drawer (severity as shape and word, filters, search, sort, the tiles); the checked copy of the language; PNG icons by name with line-art fallbacks; passkeys; step-up sign-in |
 
 Views by area: `LandingView`, `DashboardView`, `SuitesView`, `OnboardView`, `SuiteView` with
-`SuiteOverview`, `SuitePages`, `SuiteCases`, `SuiteRuns`; `DefectsView` with `DefectDrawer` (the
+`SuiteOverview`, `SuitePages`, `SuiteCases`, `SuiteTests`, `SuiteTest`, `SuiteRuns`, `SuiteSettings`; `DefectsView` with `DefectDrawer` (the
 list, and one defect's evidence, activity and triage at `/defects/:id`); `ConsoleView` (the
 canvas, the address bar, the script box, teach mode); `MonitoringView`; `ChatView`;
 `SettingsView`, `OrganizationView`; and the account flows, `LoginView`, `MfaChallengeView`,
@@ -831,10 +1002,10 @@ what it needs on a free port and drives it over the same HTTP and socket the UI 
 
 | Kind | Examples |
 |---|---|
-| end to end, on a runner of their own | `check` (rejections, discovery, the three demo runs), `check-suites`, `check-recording`, `check-teach`, `check-monitoring`, `check-chat`, `check-heal`, `check-fixes`, `check-sessions`, `check-support`, `check-console`, `check-defects`, `check-naming`, `check-pace`, `check-patience`, `check-redirects`, `check-longnames`, `check-turnstile`, `check-notes`, `check-fidelity`, `check-frames`, `check-toggles` |
+| end to end, on a runner of their own | `check` (rejections, discovery, the three demo runs), `check-suites`, `check-recording`, `check-teach`, `check-monitoring`, `check-chat`, `check-heal`, `check-fixes`, `check-sessions`, `check-support`, `check-console`, `check-defects`, `check-naming`, `check-pace`, `check-patience`, `check-aim`, `check-redirects`, `check-longnames`, `check-turnstile`, `check-notes`, `check-fidelity`, `check-frames`, `check-toggles` |
 | offline, exactly what goes on the wire | `check-heal-request`, `check-monitoring-request`, `check-chat-request`, `check-plan-request`, `check-monitoring-judge` (the engine with a scripted model), `check-plan` (the drafting core with a scripted resolver and planted runner errors), `check-docs` (the documentation index, and thirty questions against the repository's own markdown) |
 | the process, from outside | `check-keys` (the one key, no Chromium carries it), `check-hardening` (switches, limits, headers), `check-startup`, `check-runner` (dropped commands, the run lock, surviving a throw), `check-freshness`, `check-history`, `check-tenancy` |
-| pure, or a browser for one parser | `check-vocabulary`, `check-icons`, `check-app`, `check-diagram` (generated mermaid through the real parser) |
+| pure, or a browser for one parser | `check-vocabulary`, `check-icons`, `check-app`, `check-agent` (a run working a goal out, with a literal page and a scripted model), `check-diagram` (generated mermaid through the real parser) |
 | the seams | `check-auth` (Python signs, Node verifies), `check-boundary` (the runner serves what it is pointed at), `check-shared` and `scripts/copies.js` (every copy of the language), `check-deploy` (digests pinned, CI in the same image), `check-pool` (the context pool on a real browser) |
 
 The pages under `public/` are fixtures shaped to be driven: each demo app has one bug on purpose

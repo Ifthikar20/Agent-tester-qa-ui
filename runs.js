@@ -79,7 +79,7 @@ export function forOrg(org) {
      *   kept, and counted by today() against the plan, but absent from every
      *   total the dashboard shows and never folded into a defect (defects.js).
      */
-    record({ suite, suiteId, caseId, caseName, url, ms, results, steps, draft = false, scheduled = false }) {
+    record({ suite, suiteId, caseId, caseName, url, ms, results, steps, draft = false, scheduled = false, stopped = false }) {
       const failed = results.filter((r) => !r.ok);
       const fixes = results.flatMap((r) => r.fixes ?? []);
       const entry = {
@@ -115,6 +115,11 @@ export function forOrg(org) {
         ...(draft ? { draft: true } : {}),
         // Started by a schedule, not a person (schedules.js): the dashboard tells the two apart.
         ...(scheduled ? { scheduled: true } : {}),
+        // Somebody pressed Stop. The steps that ran are kept — they are what
+        // happened — but the row carries no verdict: it is out of the
+        // dashboard's numbers, out of a test's history, and files no defect
+        // (defects.js fold). A run cut short is not evidence about the site.
+        ...(stopped ? { stopped: true } : {}),
       };
       all.push(entry);
       if (all.length > CAP) all = all.slice(-CAP);
@@ -123,6 +128,43 @@ export function forOrg(org) {
     },
 
     list: () => all.slice(),
+
+    /**
+     * One case's runs, newest first — what a test's own page shows under Run
+     * history.
+     *
+     * Drafts are left out for the reason summary() leaves them out: a model
+     * trying a case out is not that case's record. A run somebody stopped is
+     * left out too, and for a sharper reason — it has no verdict. Half a run
+     * reported as a failure would put a red row against a test nobody has
+     * shown to be broken.
+     */
+    forCase(caseId, limit = 20) {
+      if (!caseId) return [];
+      const rows = [];
+      for (let i = all.length - 1; i >= 0 && rows.length < limit; i--) {
+        const r = all[i];
+        if (r.caseId === caseId && !r.draft && !r.stopped) rows.push(r);
+      }
+      return rows;
+    },
+
+    /**
+     * The newest run of every case, in one pass.
+     *
+     * The tests list draws a "last run" against each of its rows, and asking
+     * per row would be a scan of the whole history per test — fine at four
+     * tests and not at forty.
+     */
+    lastByCase() {
+      const last = new Map();
+      for (const r of all) {
+        if (!r.caseId || r.draft || r.stopped) continue;
+        const have = last.get(r.caseId);
+        if (!have || r.at > have.at) last.set(r.caseId, r);
+      }
+      return last;
+    },
 
     /**
      * How many runs today, by this machine's calendar — the same day the
@@ -155,7 +197,10 @@ export function forOrg(org) {
     summary(days = 14, suiteId = null) {
       // A draft's attempts are a model trying a case out, not the project's
       // record: they stay out of every number here (today() still counts them).
-      const runs = (suiteId ? all.filter((r) => r.suiteId === suiteId) : all).filter((r) => !r.draft);
+      // A stopped run is out for the same reason and a different one — it
+      // reached no verdict, and counting it as a failure would make pressing
+      // Stop look like finding a bug.
+      const runs = (suiteId ? all.filter((r) => r.suiteId === suiteId) : all).filter((r) => !r.draft && !r.stopped);
       const now = Date.now();
       const since = now - (days - 1) * DAY_MS;
 

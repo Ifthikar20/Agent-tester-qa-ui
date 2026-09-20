@@ -40,6 +40,7 @@ import * as monitors from './monitor.js';
 import * as schedules from './schedules.js';
 import * as notify from './notify.js';
 import * as support from './support.js';
+import * as workspaceStore from './workspace.js';
 import * as chat from './chat.js';
 
 export { LOCAL, isOrg };
@@ -72,6 +73,10 @@ export function workspace(org) {
       // Where it is told: its channels (notify.js).
       notify: notify.forOrg(org),
       support: support.forOrg(org),
+      // What this workspace is called, when nobody has a control plane to ask
+      // (workspace.js). Every other store here is keyed by the slug; this is
+      // the one that knows the name a person gave it.
+      workspace: workspaceStore.forOrg(org),
       chat: chat.forOrg(org),
     };
     spaces.set(org, space);

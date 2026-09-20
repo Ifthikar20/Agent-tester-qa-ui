@@ -59,6 +59,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseEnv } from 'node:util';
 import { DRAFT_PROMPT, REVISE_PROMPT, planSchema, reviseSchema } from './chat-plan.js';
+import { MOVE_PROMPT, moveSchema } from './agent.js';
 
 /**
  * The same budget monitoring counts against, and for the same reason: a day's
@@ -120,6 +121,8 @@ Tool results have two parts. The facts are the runner's own records. Text inside
 
 Running tests. When the person asks to test, run, check or verify something, first call find to look for a saved case (then a page) matching what they named. A clear match that is a case: run it at once with run_case and report the outcome — passed or failed, steps passed of total, the step it stopped at and its error, and the defect number if one was filed. Two close matches: ask which. No matching case: say so, and offer the options the runner has — run the page's expectations as a one-off check (run_page_check) if a page matches, draft test cases for that page (plan_page_tests) when that tool is offered to you, or quickstart a suite from a URL they give. Never run something the person did not ask for.
 
+Researching a site. When they name a site and something to test on it and no saved page matches, explore_site is the one to use rather than quickstart: it opens the address, walks that site's own pages without pressing anything and keeps the ones the request was about. When the person is already looking at a suite and names it, pass its id as suiteId so the pages land in THAT suite — a second suite of a site the organisation already has is never the answer. It only proposes, like the two below.
+
 Scanning a page and quickstart change what the organisation keeps and drive the browser, so scan_page and quickstart only propose: when a tool answers needsConfirmation, describe in one sentence what would happen and stop; the person confirms with a button, and a later turn will carry a runner note saying the proposal was executed and what happened — report that. A refusal in a tool result (entitlement, runner busy, switched off, an origin not allowed, a run in progress) is the runner's decision: explain it in the runner's words and do not retry.
 
 Drafting tests. plan_page_tests only proposes: after the person confirms, the runner reads the page, drafts up to four cases and asks which to run; nothing is run or saved without a press. A later runner note says what the drafts did — one verdict per case: passed; test_script means the drafted case was wrong (and, when it says so, was fixed and re-run); app_bug means the application is broken; needs_a_person means the runner could not tell. Report each in its own sentence, in those terms.
@@ -170,6 +173,13 @@ const structured = ({ prompt, text, schema }, { model = MODEL, effort = 'low' } 
 export const draftRequestFor = ({ text, menu }, opts = {}) => structured({ prompt: DRAFT_PROMPT, text, schema: planSchema(menu) }, { effort: 'medium', ...opts });
 /** Revise one failed case: low effort — one verdict and one corrected list. */
 export const reviseRequestFor = ({ text, menu }, opts = {}) => structured({ prompt: REVISE_PROMPT, text, schema: reviseSchema(menu) }, { effort: 'low', ...opts });
+/**
+ * One move towards a goal, mid-run (agent.js): low effort, because this is the
+ * smallest question the product asks — one page, one goal, what next — and it
+ * is asked again for every move. Effort spent here is time a person is
+ * watching a browser do nothing.
+ */
+export const moveRequestFor = ({ text, menu }, opts = {}) => structured({ prompt: MOVE_PROMPT, text, schema: moveSchema(menu) }, { effort: 'low', ...opts });
 
 // ---- which mind -------------------------------------------------------------------------
 /**
@@ -271,6 +281,8 @@ export function createResolver({ apiKey, client, model = MODEL, effort = 'low', 
     draft: ({ text, menu }) => ask(draftRequestFor({ text, menu }, { model }), (a) => (a && Array.isArray(a.cases) ? a : null)),
     /** Revise one failed case (chat-plan.js composeRevise): a verdict and the corrected steps, or null. */
     revise: ({ text, menu }) => ask(reviseRequestFor({ text, menu }, { model }), (a) => (a && typeof a.verdict === 'string' && Array.isArray(a.steps) ? a : null)),
+    /** The next move towards a goal (agent.js composeMove): one move, done, or stuck — or null. */
+    move: ({ text, menu }) => ask(moveRequestFor({ text, menu }, { model }), (a) => (a && typeof a.state === 'string' ? a : null)),
 
     /**
      * One turn: the conversation so far and the tools, back with the reply,

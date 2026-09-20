@@ -41,7 +41,17 @@
  * this file and flow.js is pinned in scripts/copies.js, and a grammar that has
  * changed without this moving fails there.
  */
-export const LANGUAGE_VERSION = 3;
+export const LANGUAGE_VERSION = 4;
+
+/**
+ * How long a `goal`'s sentence may be.
+ *
+ * A goal is one instruction — "sign in as the demo student", "get to the
+ * checkout with one item in the basket". Past a line it stops being an
+ * instruction and starts being a test case somebody declined to write down,
+ * and the run that expands it has no way to tell you which half it failed.
+ */
+export const GOAL_MAX = 120;
 
 // ------------------------------------------------------------------ literals
 
@@ -137,6 +147,7 @@ export const VERBS = [
     syntax: [{ re: /^click\s+(.+)$/i, ir: (m) => ({ target: target(m[1]) }) }],
     show: (s) => `click ${showTarget(s.target)}`,
     label: (s, t) => `click ${t(s.target, 16)}`,
+    say: (s) => `Click ${sayTarget(s.target)}`,
   },
   {
     // Go there and stay, without clicking — for a menu that only exists while
@@ -145,6 +156,7 @@ export const VERBS = [
     syntax: [{ re: /^hover\s+(.+)$/i, ir: (m) => ({ target: target(m[1]) }) }],
     show: (s) => `hover ${showTarget(s.target)}`,
     label: (s, t) => `hover ${t(s.target, 16)}`,
+    say: (s) => `Point at ${sayTarget(s.target)}`,
   },
   {
     op: 'fill',
@@ -154,12 +166,14 @@ export const VERBS = [
     }],
     show: (s) => `fill ${showTarget(s.target)} = ${showValue(s)}`,
     label: (s, t) => (s.valueRef ? `fill ${t(s.target, 12)} ← vault` : `fill ${t(s.target, 17)}`),
+    say: (s) => `Type ${sayValue(s)} into ${sayTarget(s.target)}`,
   },
   {
     op: 'wait',
     syntax: [{ re: /^wait\s+(\d+)\s*ms$/i, ir: (m) => ({ ms: Number(m[1]) }) }],
     show: (s) => `wait ${s.ms}ms`,
     label: (s) => `wait ${s.ms}ms`,
+    say: (s) => `Wait ${s.ms > 999 ? `${(s.ms / 1000).toFixed(1)} seconds` : `${s.ms}ms`}`,
   },
   {
     // Moving the page is an action, not scenery. `top` and `bottom` mean the
@@ -171,6 +185,7 @@ export const VERBS = [
     ],
     show: (s) => `scroll to ${s.to ?? showTarget(s.target)}`,
     label: (s, t) => (s.to ? `scroll ${s.to}` : `scroll to ${t(s.target, 12)}`),
+    say: (s) => (s.to ? `Scroll to the ${s.to} of the page` : `Scroll to ${sayTarget(s.target)}`),
     // Boolean(), not the target itself: checkAction treats anything but `true`
     // as the reason a step is invalid, so returning `s.target` refused every
     // named scroll at save, giving its own target as the reason.
@@ -184,12 +199,14 @@ export const VERBS = [
     syntax: [{ re: /^tick\s+(.+)$/i, ir: (m) => ({ target: target(m[1]) }) }],
     show: (s) => `tick ${showTarget(s.target)}`,
     label: (s, t) => `tick ${t(s.target, 17)}`,
+    say: (s) => `Tick ${sayTarget(s.target)}`,
   },
   {
     op: 'untick',
     syntax: [{ re: /^untick\s+(.+)$/i, ir: (m) => ({ target: target(m[1]) }) }],
     show: (s) => `untick ${showTarget(s.target)}`,
     label: (s, t) => `untick ${t(s.target, 15)}`,
+    say: (s) => `Untick ${sayTarget(s.target)}`,
   },
   {
     // An option in a dropdown, by the words on it: a native select, or a
@@ -203,6 +220,7 @@ export const VERBS = [
     }],
     show: (s) => `choose ${showTarget(s.target)} = ${showValue(s)}`,
     label: (s, t) => (s.valueRef ? `choose ${t(s.target, 12)} ← vault` : `choose ${t(s.value, 8)} in ${t(s.target, 8)}`),
+    say: (s) => `Choose ${sayValue(s)} in ${sayTarget(s.target)}`,
     check: (s) => (Boolean(s.target) && (Boolean(s.valueRef) || (typeof s.value === 'string' && s.value.trim().length > 0)))
       || 'choose needs the dropdown and the option to pick in it',
   },
@@ -218,7 +236,48 @@ export const VERBS = [
     ],
     show: (s) => `press ${s.key}${s.target ? ` in ${showTarget(s.target)}` : ''}`,
     label: (s, t) => `press ${t(s.key, 9)}${s.target ? ` in ${t(s.target, 9)}` : ''}`,
+    say: (s) => `Press ${s.key}${s.target ? ` in ${sayTarget(s.target)}` : ''}`,
     check: (s) => isKey(s.key) || `press knows ${KEY_NAMES.join(', ')} (with Shift, Control, Alt or Meta in front) — not "${s.key}"`,
+  },
+
+  {
+    /**
+     * A step written as what to achieve, not as what to press.
+     *
+     * Every other verb here names an element and a move, which is the whole
+     * reason the language is safe: the action space is a handful of verbs over
+     * elements that must already exist on an allowlisted page. A goal names
+     * neither, and the runner works the moves out at run time by reading the
+     * page and choosing from what is on it (agent.js).
+     *
+     * That does not widen the action space, and the distinction is the point.
+     * A goal is not an escape hatch into "do anything" — it is expanded into
+     * these same verbs against these same elements, through the same
+     * `validate()`, and every move it makes is reported as its own line. What
+     * it buys is a test that survives the page being redesigned, which a
+     * recorded click does not.
+     *
+     * The text is a sentence, and the punctuation it may not contain is the
+     * punctuation the document format uses: a quote, a pipe, a semicolon or a
+     * newline in an edge label is a case that no longer parses. Better to
+     * refuse it at the door than to write a file that cannot be read back.
+     */
+    op: 'goal',
+    syntax: [{ re: /^goal\s+(.+)$/i, ir: (m) => ({ text: unq(m[1]) }) }],
+    show: (s) => `goal '${s.text}'`,
+    label: (s, t) => `goal ${t(s.text, 16)}`,
+    // Its own words, because they were written to be read by a person in the
+    // first place — a goal that needed rephrasing was badly written. Only the
+    // first letter is touched, so it reads as the sentence it is beside every
+    // other step's ("Click the first 'Blog' link").
+    say: (s) => { const t = String(s.text ?? ''); return t ? t[0].toUpperCase() + t.slice(1) : t; },
+    check: (s) => {
+      const text = typeof s.text === 'string' ? s.text.trim() : '';
+      if (!text) return 'a goal needs a sentence saying what to achieve';
+      if (text.length > GOAL_MAX) return `a goal is one sentence — at most ${GOAL_MAX} characters, not ${text.length}`;
+      if (/['"`|;\n]/.test(text)) return 'a goal may not contain a quote, a pipe, a semicolon or a newline — the document format uses them';
+      return true;
+    },
   },
 
   // ------------------------------------------------------------- assertions
@@ -234,6 +293,7 @@ export const VERBS = [
     // the vault, and a script is a thing people paste into tickets.
     show: (s) => `check ${showTarget(s.target)} is ${String(s.value).length} chars`,
     label: (s, t) => `${t(s.target, 8)} = ${String(s.value).length} chars`,
+    say: (s) => `Check ${sayTarget(s.target)} holds ${String(s.value).length} characters`,
   },
   {
     op: 'expect',
@@ -241,6 +301,7 @@ export const VERBS = [
     syntax: [{ re: /^check\s+at\s+top$/i, ir: () => ({}) }],
     show: () => 'check at top',
     label: () => 'at top of page',
+    say: () => 'Check the page is scrolled to the top',
   },
   {
     // What the last navigation did, which the final URL cannot tell you: a
@@ -251,6 +312,7 @@ export const VERBS = [
     syntax: [{ re: /^check\s+status\s+(\d{3})$/i, ir: (m) => ({ value: Number(m[1]) }) }],
     show: (s) => `check status ${s.value}`,
     label: (s) => `HTTP ${s.value}`,
+    say: (s) => `Check the page answered ${s.value}`,
   },
   {
     op: 'expect',
@@ -261,6 +323,7 @@ export const VERBS = [
     ],
     show: (s) => (s.value === 0 ? 'check no redirect' : `check ${s.value} redirects`),
     label: (s) => (s.value === 0 ? 'no redirect' : `${s.value} redirects`),
+    say: (s) => (s.value === 0 ? 'Check it went straight there, with no redirect' : `Check it redirected ${s.value === 1 ? 'once' : s.value === 2 ? 'twice' : `${s.value} times`}`),
   },
   {
     op: 'expect',
@@ -268,12 +331,14 @@ export const VERBS = [
     syntax: [{ re: /^check\s+redirect\s+via\s+(.+)$/i, ir: (m) => ({ value: unq(m[1]) }) }],
     show: (s) => `check redirect via '${s.value}'`,
     label: (s, t) => `via ${t(s.value, 14)}`,
+    say: (s) => `Check it went through "${s.value}"`,
   },
   {
     op: 'expect',
     assert: 'textVisible',
     syntax: [{ re: /^see\s+(.+)$/i, ir: (m) => ({ value: unq(m[1]) }) }],
     show: (s) => `see '${s.value}'`,
+    say: (s) => `Check "${s.value}" is on the page`,
     label: (s, t) => `text: ${t(s.value, 12)}`,
   },
   {
@@ -284,6 +349,7 @@ export const VERBS = [
     syntax: [],
     show: () => null,
     label: (s, t) => `url ~ ${t(s.value, 12)}`,
+    say: (s) => `Check the address contains "${s.value}"`,
   },
   {
     // Likewise: the entry node is the goto.
@@ -291,6 +357,7 @@ export const VERBS = [
     syntax: [],
     show: () => null,
     label: (s, t) => `▶ ${t(s.url, 54)}`,
+    say: (s) => `Open ${s.url}`,
   },
 ];
 
@@ -347,6 +414,61 @@ export function labelAction(step, trunc) {
 }
 
 /** True, or the reason this step is not valid. Shape only — see ops.js for the rest. */
+
+/**
+ * A target, as a sentence names it: `nth1/link:Blog` is 'the first "Blog"
+ * link', `navigation/link:Pricing` is 'the "Pricing" link in the navigation'.
+ *
+ * The script form is exact and the reader has to know the grammar. This is for
+ * somebody watching a run who does not, and who wants to know what the thing
+ * is about to do — so it spends words rather than saving them.
+ */
+/**
+ * What a step types, said plainly. `$TODO` is not a key — it is what the
+ * recorder writes when it refused to keep a password, and the run fails on it
+ * until somebody maps it. Saying "the saved TODO" made it read like a key
+ * called TODO; this says what it actually is.
+ */
+const sayValue = (s) => {
+  if (!s.valueRef) return `"${s.value}"`;
+  const key = String(s.valueRef).replace(/^secrets\./, '');
+  return key === 'TODO' ? 'the password (not captured yet — give it a vault key)' : `the saved ${key}`;
+};
+
+export function sayTarget(target) {
+  const raw = String(target ?? '');
+  const i = raw.indexOf(':');
+  if (i < 0) return raw ? `"${raw}"` : 'it';
+  const head = raw.slice(0, i);
+  const name = raw.slice(i + 1);
+  const [scope, role] = head.includes('/') ? [head.slice(0, head.indexOf('/')), head.slice(head.indexOf('/') + 1)] : [null, head];
+  const nth = /^nth(\d+)$/.exec(scope ?? '');
+  const ORDINAL = ['', 'first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth'];
+  const which = nth ? `${ORDINAL[Number(nth[1])] ?? `${nth[1]}th`} ` : '';
+  // What a person would call it. A label or a placeholder names a field; text
+  // is words on the page rather than a control.
+  const WORD = { link: 'link', button: 'button', textbox: 'field', searchbox: 'search box', checkbox: 'checkbox',
+    radio: 'radio button', combobox: 'dropdown', menuitem: 'menu item', tab: 'tab', option: 'option',
+    label: 'field', placeholder: 'field', heading: 'heading', text: null, switch: 'switch' };
+  const word = Object.prototype.hasOwnProperty.call(WORD, role) ? WORD[role] : role;
+  const where = scope && !nth ? ` in the ${scope}` : '';
+  if (word === null) return `the ${which}text "${name}"${where}`;
+  return `the ${which}"${name}" ${word}${where}`;
+}
+
+/**
+ * One step, in plain English, for somebody watching rather than editing.
+ *
+ * `showAction` writes the script — exact, round-trips, and assumes the
+ * grammar. This writes the sentence. Both come from the same row, so a verb
+ * cannot gain a script form and quietly keep an old description.
+ */
+export function sayAction(step) {
+  const row = VERBS.find((v) => v.op === step.op && (v.assert ?? null) === (step.assert ?? null));
+  if (!row?.say) return labelAction(step, (t, n) => String(t ?? '').slice(0, n));
+  try { return row.say(step); } catch { return labelAction(step, (t, n) => String(t ?? '').slice(0, n)); }
+}
+
 export function checkAction(step) {
   const v = verbFor(step);
   if (!v) return `unknown op "${key(step?.op, step?.assert)}"`;

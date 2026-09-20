@@ -16,7 +16,7 @@
  * saying the list is full, drawn as an upgrade prompt; a 403 forbidden is
  * a member asking for an owner's or admin's change.
  */
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { api } from '@/api';
 import { useLive } from '@/stores/live';
 import { useSession } from '@/stores/session';
@@ -29,6 +29,7 @@ import ReauthSheet from '@/components/ReauthSheet.vue';
 import UpgradePrompt from '@/components/UpgradePrompt.vue';
 import ThemeSwitch from '@/components/ThemeSwitch.vue';
 import NotifyPanel from '@/components/NotifyPanel.vue';
+import Btn from '@/components/Btn.vue';
 
 const live = useLive();
 const session = useSession();
@@ -41,8 +42,56 @@ const themeChoice = computed(() => (ui.theme === 'system'
   : `Always ${LABEL[ui.theme].toLowerCase()}, whatever this device prefers.`));
 const draft = ref('');
 const error = ref(null);
+// A vault key being set from here. The value goes to the runner and nowhere
+// else — not into this component's history, not into the log.
+const secretName = ref('');
+const secretValue = ref('');
+const secretError = computed(() => live.secretError);
+function addSecret() {
+  if (!secretName.value || !secretValue.value) return;
+  live.secretError = null;
+  live.send({ t: 'secrets.set', name: secretName.value, value: secretValue.value });
+  secretValue.value = '';
+}
+function removeSecret(name) {
+  live.secretError = null;
+  live.send({ t: 'secrets.remove', name });
+}
 const upgrade = ref(null);
 const state = ref(null);
+
+/**
+ * The workspace's own name, editable only where it is this runner's to keep.
+ *
+ * With a control plane the organisation owns it and this page links to the
+ * members page instead of offering a field that would write somewhere the
+ * control plane does not read.
+ *
+ * A copy, not a binding on the store: typing in the box should not rename the
+ * sidebar live and then revert when you navigate away without saving.
+ */
+const ws = ref({ name: '', owner: '' });
+const wsSaving = ref(false);
+const wsSaved = ref(false);
+const wsError = ref(null);
+const wsDirty = computed(() => ws.value.name.trim() !== (live.workspace?.name ?? '')
+  || ws.value.owner.trim() !== (live.workspace?.owner ?? ''));
+const resetWorkspace = () => {
+  ws.value = { name: live.workspace?.name ?? '', owner: live.workspace?.owner ?? '' };
+};
+watch(() => live.workspace, resetWorkspace, { immediate: true });
+async function saveWorkspace() {
+  if (!wsDirty.value || wsSaving.value) return;
+  wsSaving.value = true; wsError.value = null; wsSaved.value = false;
+  try {
+    const r = await api.setWorkspace({ name: ws.value.name.trim(), owner: ws.value.owner.trim() });
+    // The greeting is what every other view reads, so update the store from the
+    // answer rather than waiting for a reconnect to notice.
+    live.workspace = r.workspace;
+    wsSaved.value = true;
+  } catch (e) { wsError.value = e.message; }
+  finally { wsSaving.value = false; }
+}
 
 const refresh = async () => { state.value = await api.state(); live.secrets = state.value.secrets ?? []; };
 
@@ -125,6 +174,35 @@ async function remove(o) {
     <p v-if="error" class="mb-4 rounded-xl border border-critical/25 bg-critical/5 px-4 py-3 text-[13px] text-critical">{{ error }}</p>
     <UpgradePrompt v-if="upgrade" class="mb-4" :limit="upgrade.limit" :plan="upgrade.plan" @dismiss="upgrade = null" />
 
+    <!-- The name above everything else here. First, because it is the thing
+         the rest of this page belongs to. -->
+    <section class="card mb-4 p-5">
+      <h2 class="text-[15px] font-medium">Workspace</h2>
+      <p class="mt-1 text-[13px] leading-relaxed text-ink-2">
+        The top level: projects, runs, defects, monitors, the origins below and the vault are all this
+        workspace's.
+        <template v-if="session.required">Its name comes from the organisation you are signed in to.</template>
+        <template v-else>With no control plane there is nobody to ask, so the runner keeps the name you give it.</template>
+      </p>
+      <div v-if="!session.required" class="mt-3 grid gap-3 sm:grid-cols-2">
+        <Field label="Workspace name" hint="Shown at the top of the sidebar.">
+          <input v-model="ws.name" maxlength="60" type="text" placeholder="Acme QA" @keydown.enter.prevent="saveWorkspace">
+        </Field>
+        <Field label="Your name" hint="Who set it up. Not an account — there are none on this runner.">
+          <input v-model="ws.owner" maxlength="60" type="text" placeholder="Ada" @keydown.enter.prevent="saveWorkspace">
+        </Field>
+      </div>
+      <dl v-else class="mt-3 grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-[13px]">
+        <dt class="text-ink-3">Name</dt>
+        <dd>{{ session.org?.name ?? '—' }}<RouterLink to="/organisation" class="ml-2 text-brand-2 underline underline-offset-2">members and invitations</RouterLink></dd>
+      </dl>
+      <div v-if="!session.required" class="mt-3 flex items-center gap-3">
+        <p v-if="wsSaved" class="text-[12.5px] text-good">Saved.</p>
+        <p v-if="wsError" class="text-[12.5px] text-critical">{{ wsError }}</p>
+        <Btn class="ml-auto" size="sm" :disabled="!wsDirty" :busy="wsSaving" busy-label="Saving…" @click="saveWorkspace">Save</Btn>
+      </div>
+    </section>
+
     <section class="card mb-4 p-5">
       <h2 class="text-[15px] font-medium">Allowed origins</h2>
       <p class="mt-1.5 max-w-xl text-[13px] leading-relaxed text-ink-2">
@@ -159,9 +237,37 @@ async function remove(o) {
       </p>
       <ul class="mt-4 flex flex-wrap gap-1.5">
         <li v-for="s in live.secrets" :key="s"
-            class="rounded-full border border-hairline px-3 py-1.5 font-mono text-[12px]">${{ s }}</li>
+            class="flex items-center gap-2 rounded-full border border-hairline px-3 py-1.5 font-mono text-[12px]">
+          ${{ s }}
+          <button class="text-ink-3 hover:text-critical" :aria-label="`Remove $${s}`"
+                  title="Remove it" @click="removeSecret(s)">×</button>
+        </li>
         <li v-if="!live.secrets.length" class="text-[13px] text-ink-3">None set.</li>
       </ul>
+
+      <!--
+        A recorded password is written as $TODO and never as its value, so the
+        value has to come from somewhere. Here is somewhere: it goes straight
+        into the organisation's file on the runner and never comes back out.
+      -->
+      <div class="mt-4 flex flex-wrap items-end gap-2">
+        <label class="text-[12.5px] text-ink-2">
+          <span class="mb-1 block">Name</span>
+          <input v-model="secretName" class="w-40 font-mono" placeholder="QA_PASS" @keyup.enter="addSecret">
+        </label>
+        <label class="text-[12.5px] text-ink-2">
+          <span class="mb-1 block">Value</span>
+          <input v-model="secretValue" type="password" class="w-56" placeholder="the password itself"
+                 autocomplete="new-password" @keyup.enter="addSecret">
+        </label>
+        <button class="rounded-full border border-hairline px-4 py-2 text-[13px] disabled:opacity-40"
+                :disabled="!secretName || !secretValue" @click="addSecret">Set</button>
+      </div>
+      <p class="mt-2 text-[12.5px] text-ink-3">
+        Then write <code>$<template>{{ secretName || 'QA_PASS' }}</template></code> in the step —
+        a recording that says <code>$TODO</code> is one whose password was dropped, and renaming it here is what makes it run.
+      </p>
+      <p v-if="secretError" class="mt-2 text-[12.5px] text-critical">{{ secretError }}</p>
       <p v-if="state && !state.usage?.vault" class="mt-3 text-[12.5px] text-warn">
         The {{ state.plan ?? 'current' }} plan does not include the vault: a <code>$KEY</code> in a step will not resolve.
       </p>
@@ -227,6 +333,21 @@ async function remove(o) {
         <dd class="truncate font-mono text-[12px]">{{ state.url ?? (state.driving?.org && !state.driving.mine ? `another organisation’s (${state.driving.org})` : 'nothing open') }}</dd>
         <dt class="text-ink-3">Organisation</dt>
         <dd class="font-mono text-[12px]">{{ state.org }}<template v-if="state.plan"> · {{ state.plan }} plan</template></dd>
+        <!-- Whether there is anybody to BE signed in.
+             Worth stating outright, because its absence is otherwise only
+             visible as things that are missing: no name in the sidebar, no
+             Sign out at the foot of it, no Organisation or Security pages.
+             Four holes where a feature should be, and nothing anywhere saying
+             they are holes on purpose. -->
+        <dt class="text-ink-3">Sign-in</dt>
+        <dd v-if="session.required">
+          <template v-if="session.user">{{ session.user.email }} — sign out from the foot of the sidebar</template>
+          <template v-else>On, and nobody is signed in</template>
+        </dd>
+        <dd v-else class="text-ink-2">
+          Off — no control plane is configured, so this runner has no accounts and nothing to sign
+          in or out of. Start it with <code class="font-mono text-[12px]">--auth</code> against one to change that.
+        </dd>
       </dl>
     </section>
   </div>

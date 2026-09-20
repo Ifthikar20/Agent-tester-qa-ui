@@ -90,12 +90,20 @@ const ready = computed(() => chat.available !== false && chat.on !== false && !(
 const messages = computed(() => chat.current?.messages ?? []);
 const empty = computed(() => !messages.value.length && !chat.writing);
 
-/** Three questions, and a page to test when there is one. */
+/**
+ * What to offer someone looking at an empty prompt.
+ *
+ * The work first — draft tests for a page, test one — because this is the
+ * front door now and "what would I do here" is answered by a task, not by a
+ * question about data the runner happens to hold. The questions keep their
+ * tiles underneath, which is where they belong once there is something to ask
+ * about.
+ */
 const suggestions = computed(() => [
+  ...(firstPage.value ? [`Draft tests for the ${firstPage.value} page`, `Test the ${firstPage.value} page`] : []),
   'How many defects do we have?',
   'What were the latest scans?',
   'Which test cases are saved?',
-  ...(firstPage.value ? [`Test the ${firstPage.value} page`, `Draft tests for the ${firstPage.value} page`] : []),
 ]);
 
 /**

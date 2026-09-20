@@ -103,7 +103,29 @@ export function elementFacts(snap) {
   return facts;
 }
 
-/** `16px · 640×48 · 5 rows · visible` — a monitor's live numbers, in one line; `38 blocks · 1180×2140 · 2 310 chars` for the whole page. */
+/**
+ * What a whole-page reading forgave or anticipated, as notes: `scroll of
+ * 1090px ignored`, `measured at 820px (baseline 1180px): hidden content
+ * treated as responsive`. `scrolled` and `viewport` are the runner's
+ * (monitor.js pageNoteFor), on a monitor's `metrics` and an incident's
+ * `diff.pageChanges` alike.
+ */
+function notesOf(scrolled, viewport) {
+  const out = [];
+  if (scrolled) out.push(`scroll of ${Math.max(Math.abs(scrolled.dx ?? 0), Math.abs(scrolled.dy ?? 0))}px ignored`);
+  if (viewport?.width && viewport.baseline) {
+    const at = `measured at ${viewport.width}px (baseline ${viewport.baseline}px)`;
+    out.push(viewport.adopted ? `${at}: compared with this width’s own baseline` : viewport.strict ? `${at}: Claude read the re-flow as a regression` : `${at}: hidden content treated as responsive`);
+  }
+  return out;
+}
+/** The notes under an incident's chips: what its diff forgave or anticipated. */
+export function pageNotes(diff) {
+  const d = diff?.pageChanges;
+  return d ? notesOf(d.scrolled, d.viewport) : [];
+}
+
+/** `16px · 640×48 · 5 rows · visible` — a monitor's live numbers, in one line; `38 blocks · 1180×2140 · 2 310 chars · scroll of 1090px ignored` for the whole page. */
 export function metricsLine(m) {
   if (!m) return 'no measurement yet';
   if (m.exists === false) return 'element missing';
@@ -111,6 +133,7 @@ export function metricsLine(m) {
     const parts = [`${m.blocks ?? 0} blocks`];
     if (m.width != null && m.height != null) parts.push(`${Math.round(m.width)}×${Math.round(m.height)}`);
     if (m.textLength != null) parts.push(`${m.textLength} chars`);
+    parts.push(...notesOf(m.scrolled, m.viewport));
     return parts.join(' · ');
   }
   const parts = [];
@@ -121,6 +144,8 @@ export function metricsLine(m) {
   return parts.join(' · ');
 }
 
+/** The whole page's five questions as chips: what the runner's compilePageRule checks read as (`logic unchanged`, `elements unchanged`, `words unchanged`, `layout unchanged`, `aligned`). */
+const PAGE_CHIPS = { logic: 'logic unchanged', elements: 'elements unchanged', content: 'words unchanged', layout: 'layout unchanged', alignment: 'aligned' };
 /** One compiled check as a chip: `fontSize ≤ 18`, `width unchanged`, `Δheight ≤ 40`. */
 export function chipText(c) {
   const rel = c.compareToBaseline ? 'Δ' : '';
@@ -133,7 +158,7 @@ export function chipText(c) {
     case 'eq': return `${c.metric} = ${rel}${v}`;
     case 'neq': return `${c.metric} ≠ ${v}`;
     case 'between': return `${c.metric} ${rel}${c.min}–${c.max}`;
-    case 'unchanged': return c.metric === 'content' ? 'words unchanged' : `${c.metric} unchanged`;
+    case 'unchanged': return PAGE_CHIPS[c.metric] ?? `${c.metric} unchanged`;
     case 'contains': return `${c.metric} contains "${v}"`;
     case 'not_contains': return `${c.metric} without "${v}"`;
     case 'exists': return off ? 'must not exist' : 'must exist';
@@ -186,15 +211,34 @@ export function clauseChips(spec, llmMode) {
   });
 }
 
-/** `fontSize: 16 → 36`, one per metric that moved — or, for the whole page, `4 added · 9 moved`. */
+/** `fontSize: 16 → 36`, one per metric that moved — or, for the whole page, one per kind of change (pageChips). */
 export function diffChips(diff) {
   return Object.entries(diff ?? {}).flatMap(([k, v]) => {
-    if (k === 'pageChanges') {
-      const t = v?.totals ?? {};
-      return [['added', t.added], ['removed', t.removed], ['moved', t.moved], ['reworded', t.changed]].filter(([, n]) => n > 0).map(([w, n]) => `${n} ${w}`);
-    }
+    if (k === 'pageChanges') return pageChips(v);
     return [k === 'htmlChanged' ? 'markup changed' : Array.isArray(v) ? `${k}: ${v[0]} → ${v[1]}` : `${k}: ${v}`];
   });
+}
+const count = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+/**
+ * The chips of a whole-page diff, one per kind of change with its exact total
+ * (the runner's diffPage totals): `1 link changed · 2 elements removed · 1
+ * reworded · 9 moved · 1 misaligned`. A diff from before the categories has
+ * only the raw buckets, and gets the old chips.
+ */
+function pageChips(d) {
+  const t = d?.totals ?? {};
+  if (t.logic == null) return [['added', t.added], ['removed', t.removed], ['moved', t.moved], ['reworded', t.changed]].filter(([, n]) => n > 0).map(([w, n]) => `${n} ${w}`);
+  const out = [];
+  if (t.logic) out.push((d.logicChanges ?? []).every((b) => b.t === 'a') ? count(t.logic, 'link changed', 'links changed') : count(t.logic, 'control changed', 'controls changed'));
+  if (t.elementsAdded) out.push(count(t.elementsAdded, 'element added', 'elements added'));
+  if (t.elementsRemoved) out.push(count(t.elementsRemoved, 'element removed', 'elements removed'));
+  if (t.elementsRenamed) out.push(count(t.elementsRenamed, 'element renamed', 'elements renamed'));
+  if (t.changed) out.push(`${t.changed} reworded`);
+  if (t.wordsAdded) out.push(count(t.wordsAdded, 'text block added', 'text blocks added'));
+  if (t.wordsRemoved) out.push(count(t.wordsRemoved, 'text block removed', 'text blocks removed'));
+  if (t.moved) out.push(`${t.moved} moved`);
+  if (t.alignment) out.push(`${t.alignment} misaligned`);
+  return out;
 }
 
 const short = (t, n = 40) => (typeof t === 'string' && t.length > n ? `${t.slice(0, n - 1)}…` : (t ?? ''));
@@ -214,19 +258,35 @@ export function moveWords(b) {
   if (b.dw) out.push(`${Math.abs(Math.round(b.dw))}px ${b.dw > 0 ? 'wider' : 'narrower'}`);
   return out.join(', ') || 'moved';
 }
+/** `a “Blog” now points at /blog-2 instead of /blog` — what a block does now, against what it did (the runner's logicWords). */
+function logicLine(b) {
+  const name = blockName({ t: b.t, id: b.id, text: b.text });
+  if (b.t === 'a' || b.t === 'form') return b.before === b.after ? `${name} now points somewhere else under ${b.after || 'the same path'}` : `${name} now points at ${b.after || 'nothing'} instead of ${b.before || 'nothing'}`;
+  return `${name} is now ${b.after || 'plain'} (was ${b.before || 'plain'})`;
+}
+/** `section#b now overlaps section#a` — a block that is no longer where things fit (the runner's alignWords). */
+function alignLine(b) {
+  if (b.how === 'overlaps') return `${blockName(b)} now overlaps ${blockName(b.with)}`;
+  if (b.how === 'clipped') return `${blockName(b)} now runs past the page’s edge`;
+  return `${blockName(b)} is now off the page`;
+}
 /**
- * One line per sampled change on the whole page: what was added, what went,
- * what moved and what was reworded (the runner's diffPage samples; the chips
- * carry the exact totals).
+ * One line per sampled change on the whole page: what does something else,
+ * what was added, what went, what was renamed, what was reworded, what now
+ * overlaps and what moved (the runner's diffPage samples; the chips carry the
+ * exact totals).
  */
 export function pageLines(diff) {
   const d = diff?.pageChanges;
   if (!d) return [];
   const out = [];
+  for (const b of d.logicChanges ?? []) out.push(logicLine(b));
   for (const b of d.added ?? []) out.push(`added ${blockName(b)}`);
   for (const b of d.removed ?? []) out.push(`removed ${blockName(b)}`);
-  for (const b of d.moved ?? []) out.push(`${blockName(b)} ${moveWords(b)}`);
+  for (const b of (d.elementChanges ?? []).filter((x) => x.how === 'renamed')) out.push(`${blockName({ t: b.t, id: b.id })} renamed “${short(b.before)}” → “${short(b.after)}”`);
   for (const b of d.changed ?? []) out.push(`${blockName({ t: b.t, id: b.id })} “${short(b.before)}” → “${short(b.after)}”`);
+  for (const b of d.alignmentChanges ?? []) out.push(alignLine(b));
+  for (const b of d.moved ?? []) out.push(`${blockName(b)} ${moveWords(b)}`);
   return out;
 }
 

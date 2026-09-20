@@ -83,8 +83,8 @@ export function canonicalId(input) {
  */
 export const TOOL_NAMES = Object.freeze([
   'run_history', 'defects', 'defect', 'suites', 'suite', 'find', 'pages_scanned', 'monitoring', 'runner_state',
-  'run_case', 'run_suite', 'run_page_check', 'scan_page', 'plan_page_tests', 'quickstart', 'docs',
-  'attachment', 'translate_code', 'chart',
+  'run_case', 'run_suite', 'run_page_check', 'scan_page', 'plan_page_tests', 'explore_site', 'quickstart', 'docs',
+  'setup', 'attachment', 'translate_code', 'chart',
 ]);
 
 /** What `chart` can draw, from the records or from an attached table. */
@@ -383,6 +383,11 @@ const SPECS = Object.freeze({
     description: 'The element monitors watching pages for this organisation, their state and rule, and the incidents currently open.',
     inputSchema: Object.freeze({ type: 'object', additionalProperties: false, required: [], properties: {} }),
   }),
+  setup: Object.freeze({
+    name: 'setup',
+    description: "How this organisation is set up, and what runs without anybody watching: the schedules (what runs on a cadence, and when), where a failure is told (the notification channels, by kind and name, never their addresses), the origins the runner is allowed to open, and the NAMES of the vault keys a step may type. Use it for questions about what is automated, what is configured, what gets notified and what the runner is permitted to reach. It never returns a secret's value.",
+    inputSchema: Object.freeze({ type: 'object', additionalProperties: false, required: [], properties: {} }),
+  }),
   runner_state: Object.freeze({
     name: 'runner_state',
     description: 'What the runner is doing right now: the page it has open, whether a run is in progress, who is driving the one browser, the plan and what has been used of it.',
@@ -475,6 +480,19 @@ const SPECS = Object.freeze({
         x: { type: 'string', description: 'For a file: the column of labels. Default the first text column.' },
         y: { type: 'array', items: { type: 'string' }, description: 'For a file: the columns of numbers, at most four. Default every numeric column.' },
         name: { type: 'string', description: 'For a file: which attached file. Default the most recent table.' },
+      },
+    }),
+  }),
+  explore_site: Object.freeze({
+    name: 'explore_site',
+    description: 'PROPOSE researching a site from a URL and what the person asked about: the runner opens it, walks its own pages without pressing anything, ranks them against the request and keeps the relevant ones as a suite, so it answers needsConfirmation and a person presses the button. Use this when they name a site and a thing to test but no saved page matches. Describe what would happen in one sentence and stop.',
+    inputSchema: Object.freeze({
+      type: 'object', additionalProperties: false, required: ['url'],
+      properties: {
+        url: { type: 'string', description: 'The address to start from, as the person gave it.' },
+        focus: { type: 'string', description: 'What they asked to test, in their own words, so the pages can be ranked against it.' },
+        name: { type: 'string', description: 'What to call the suite, when they said.' },
+        suiteId: { type: 'string', description: 'Fill THIS suite instead of making a new one — the id, when the person is already looking at a suite and it is the same site. A suite that already holds the page keeps it; its targets are refreshed.' },
       },
     }),
   }),
@@ -801,6 +819,46 @@ export function makeTools({ space, ent, switches = null, org, actions, redact, p
       },
     },
 
+    setup: {
+      label: () => 'read how this organisation is set up',
+      validate: () => ({}),
+      summary: ({ facts }) => [
+        `${facts.schedules.length} schedule${facts.schedules.length === 1 ? '' : 's'}`,
+        `${facts.channels.length} channel${facts.channels.length === 1 ? '' : 's'}`,
+        `${facts.origins.length} origin${facts.origins.length === 1 ? '' : 's'}`,
+        `${facts.vaultKeys.length} vault key${facts.vaultKeys.length === 1 ? '' : 's'}`,
+      ].join(', '),
+      execute: () => {
+        const suiteName = (id) => { try { return space.suites.get(id).name; } catch { return null; } };
+        // Read-only, and names only. A channel's address and a vault value are
+        // the two things on this page that must never reach a model: one is
+        // somebody's inbox, the other is the credential itself.
+        const schedules = (space.schedules?.list?.() ?? []).slice(0, 20).map((x) => ({
+          id: x.id, kind: x.kind, name: clean(x.name ?? '', 60), when: clean(x.describe ?? x.cron ?? '', 60),
+          suiteId: x.suiteId ?? null, suite: x.suiteId ? clean(suiteName(x.suiteId), 60) : null,
+          paused: !!x.paused, lastRunAt: x.lastRunAt ?? null, lastOk: x.lastOk ?? null,
+        }));
+        const channels = (space.notify?.list?.() ?? []).slice(0, 20).map((c) => ({
+          id: c.id, kind: c.kind, name: clean(c.name ?? '', 60), events: Array.isArray(c.events) ? c.events : [],
+          failing: !!c.failing,
+        }));
+        const origins = (space.origins?.list?.() ?? []).slice(0, 40);
+        const vaultKeys = (space.vault?.names?.() ?? []).slice(0, 40);
+        return {
+          facts: {
+            org,
+            schedules,
+            channels,
+            origins,
+            vaultKeys,
+            nothingScheduled: schedules.length === 0,
+            nobodyTold: channels.length === 0,
+          },
+          unsafe: null,
+        };
+      },
+    },
+
     runner_state: {
       label: () => "read the runner's state",
       validate: () => ({}),
@@ -933,6 +991,31 @@ export function makeTools({ space, ent, switches = null, org, actions, redact, p
         const suite = suiteOf(suiteId);
         const page = pageOf(suite, pageId);
         const proposal = propose({ kind: 'scan_page', args: { suiteId, pageId }, label: `scan "${clean(page.name, 80)}"` });
+        return { facts: { needsConfirmation: true, proposal: { id: proposal.id, kind: proposal.kind, label: proposal.label } }, unsafe: null, proposal };
+      },
+    },
+
+    explore_site: {
+      label: (a) => {
+        try { return `proposed researching ${normalizeUrl(a.url).host}`; } catch { return 'proposed researching a site'; }
+      },
+      validate: (a) => {
+        let u;
+        try { u = normalizeUrl(a.url); } catch (err) { throw new BadInput(err.message); }
+        return {
+          url: u.href, host: u.host,
+          focus: a.focus == null ? '' : String(a.focus).trim().slice(0, 200),
+          name: a.name == null ? null : String(a.name).trim().slice(0, 80),
+          suiteId: isSuiteId(a.suiteId) ? a.suiteId : null,
+        };
+      },
+      summary: ({ proposal }) => `proposed ${proposal.id}`,
+      execute: ({ url, host, focus, name, suiteId }) => {
+        const proposal = propose({
+          kind: 'explore_site',
+          args: { url, focus, name, suiteId },
+          label: `research ${host}${focus ? ` for "${clean(focus, 60)}"` : ''}`,
+        });
         return { facts: { needsConfirmation: true, proposal: { id: proposal.id, kind: proposal.kind, label: proposal.label } }, unsafe: null, proposal };
       },
     },

@@ -68,14 +68,44 @@ async function switchOrg(slug) {
   finally { switching.value = false; }
 }
 /**
- * The runner's state, once, because the rail and the expanded row both draw it
- * and a second copy of this ternary is how they end up disagreeing.
+ * The runner's state, said only when it is worth saying.
+ *
+ * "Runner connected" was on screen at all times, under the workspace's name,
+ * in the one place a person looks a hundred times a day — and it is the state
+ * the product is in for essentially all of that. A label that never changes is
+ * not information; it is furniture, and it was pushing the thing you came to
+ * read down a line.
+ *
+ * Connected is the assumption. The two states worth interrupting for are the
+ * ones where something you press will not work: another organisation has the
+ * browser, or the runner is not there at all. Those say so, and only those —
+ * so the line appearing means something rather than its words changing.
+ *
+ * Null is "nothing to report", which is what both the dot and the line test.
+ * Once, because the rail and the expanded row both read it and a second copy
+ * of this ternary is how the two come to disagree.
  */
-const runnerState = computed(() => (live.busy ? `Runner busy — ${live.driving.org}`
-  : live.connected ? 'Runner connected' : 'Runner offline'));
-const runnerDot = computed(() => (live.busy ? 'bg-warn' : live.connected ? 'bg-good' : 'bg-critical'));
+const runnerTrouble = computed(() => (live.busy ? `Runner busy — ${live.driving.org}`
+  : live.connected ? null : 'Runner offline'));
+const runnerDot = computed(() => (live.busy ? 'bg-warn' : 'bg-critical'));
 
-const initial = computed(() => (session.org?.name ?? 'Local').slice(0, 1).toUpperCase());
+/**
+ * What this workspace is called, from whichever source actually knows.
+ *
+ * The control plane owns identity, so when there is one its organisation name
+ * wins. With none there is nobody to ask, and the runner keeps the name a
+ * person gave it (workspace.js) — which is why this is no longer the literal
+ * words "Local workspace" in the markup. That was a hard-coded answer to a
+ * question with a real one, and it made every laptop look like the same
+ * anonymous box.
+ *
+ * Null only in the moment before the greeting lands, or on a workspace nobody
+ * has named — and the router sends that second case to the first-run flow, so
+ * the fallback below is for the first case and for anybody who deep-linked
+ * past the guard.
+ */
+const workspaceName = computed(() => session.org?.name ?? live.workspace?.name ?? null);
+const initial = computed(() => (workspaceName.value ?? '?').slice(0, 1).toUpperCase());
 
 // The suite a page is about: its own pages carry the id in the path; the
 // console and monitoring opened on a suite carry it as ?suite=.
@@ -121,16 +151,67 @@ async function removeChat(id) {
   await chat.remove(id);
 }
 
+/**
+ * Inside a project, the sidebar is that project's.
+ *
+ * It used to be a list of every project with the open one expanded under it,
+ * which is fine at three and unusable at thirty: the sections you are actually
+ * navigating sit halfway down a list of things you are not, and they move
+ * every time a project is added. Worse, the nav answered "which projects
+ * exist" — a question you ask once — at the cost of "where am I in this one",
+ * which you ask constantly.
+ *
+ * So opening a project replaces the list with its own nav, and a back row puts
+ * the list back. Two views of one sidebar rather than one view doing both.
+ *
+ * What stays below, outside the project, is what is genuinely the workspace's:
+ * Run history and Defects span every project, and the admin pages are the
+ * organisation's. Hiding those inside a project would mean leaving the project
+ * to reach them.
+ *
+ * The console is not one of those, and used to be listed as if it were. It is
+ * a browser pointed at ONE site — see the row below.
+ */
 const SECTIONS = [
-  { to: 'suite',       label: 'Overview' },
-  { to: 'suite-pages', label: 'Pages' },
-  { to: 'suite-cases', label: 'Cases' },
-  { to: 'suite-runs',  label: 'Runs' },
+  { to: 'suite',          label: 'Overview',   icon: 'suite' },
+  { to: 'suite-tests',    label: 'Tests',      icon: 'check', count: (s) => s.cases },
+  { to: 'suite-runs',     label: 'Runs',       icon: 'history' },
+  { to: 'suite-pages',    label: 'Pages',      icon: 'list', count: (s) => s.pages },
+  { to: 'suite-cases',    label: 'Cases',      icon: 'code' },
+  /**
+   * The console belongs to a project, not to the workspace.
+   *
+   * It was under General, beside Run history and Defects, which reads as "a
+   * place in the product" — and it is not. It is a browser being driven at ONE
+   * site, and which site is the only thing that makes it useful: a recording
+   * made there is saved into a project, and the address bar is pointed at a
+   * project's origin. Somebody arriving at a console with no project has a
+   * browser and nothing to do with it.
+   *
+   * Scoped with `?suite=` and deliberately WITHOUT `?url=`. The Console button
+   * on the project's own header passes the url and so drives the browser
+   * there, which is right for a button somebody pressed meaning "take me to
+   * this site". A row in the nav is navigation, and a nav row that quietly
+   * drives a real browser to a real site is a surprise nobody asked for.
+   */
+  { to: 'console',        label: 'Console',    icon: 'console', query: true },
   // Monitoring is one page for every project, told which one by ?suite=.
-  { to: 'monitoring',  label: 'Monitoring', query: true },
+  { to: 'monitoring',     label: 'Monitoring', icon: 'monitor', query: true },
+  { to: 'suite-settings', label: 'Settings',   icon: 'settings' },
 ];
 const sectionLink = (x, s) => (x.query ? { name: x.to, query: { suite: s.id } } : { name: x.to, params: { id: s.id } });
 const sectionOn = (x, s) => (x.query ? route.name === x.to && route.query.suite === s.id : route.name === x.to);
+
+/**
+ * The project the sidebar is currently about, or null for the workspace view.
+ *
+ * Read from the route rather than held as state, so it survives a reload and a
+ * pasted link — and so Back is a navigation to `/suites` rather than a toggle
+ * somebody can leave in the wrong position.
+ */
+const openSuite = computed(() => (openId.value ? suites.list.find((s) => s.id === openId.value) ?? null : null));
+/** A test's own page is two levels in; the nav still belongs to the project. */
+const inProject = computed(() => Boolean(openSuite.value));
 </script>
 
 <template>
@@ -171,14 +252,22 @@ const sectionOn = (x, s) => (x.query ? route.name === x.to && route.query.suite 
     <div class="mb-4" :class="rail ? 'mx-2' : 'mx-3'">
       <div class="flex items-center gap-2.5 py-1" :class="rail ? 'justify-center' : 'px-2'">
         <span class="relative grid size-7 shrink-0 place-items-center rounded-lg bg-ink/[0.05] text-[12px] font-semibold text-ink-2"
-              :title="rail ? `${session.org?.name ?? 'Local workspace'} — ${runnerState}` : runnerState">{{ initial }}<span
+              :title="[workspaceName ?? 'This workspace has no name yet', runnerTrouble].filter(Boolean).join(' — ')">{{ initial }}<span
+              v-if="runnerTrouble"
               class="absolute -bottom-0.5 -right-0.5 size-2 rounded-full ring-2 ring-panel" :class="runnerDot" /></span>
         <span v-if="!rail" class="min-w-0 flex-1">
           <span class="flex items-baseline gap-1.5">
-            <span class="block truncate text-[13px] font-medium text-ink" :title="session.org?.slug">{{ session.org?.name ?? 'Local workspace' }}</span>
+            <!-- Unnamed is a state, not a blank: it is a link to the page
+                 that fixes it rather than a placeholder somebody has to
+                 recognise as one. -->
+            <RouterLink v-if="!workspaceName" to="/settings" class="block truncate text-[13px] font-medium text-ink-3 underline decoration-hairline underline-offset-2 hover:text-ink">Name this workspace</RouterLink>
+            <span v-else class="block truncate text-[13px] font-medium text-ink" :title="session.org?.slug ?? live.org">{{ workspaceName }}</span>
             <span v-if="session.org?.plan" class="shrink-0 text-[10.5px] uppercase tracking-[0.06em] text-ink-3">{{ session.org.plan }}</span>
           </span>
-          <span class="block truncate text-[11.5px] text-ink-3">{{ runnerState }}</span>
+          <!-- Only when there is something to say. A second line that always
+               reads the same is a line nobody reads. -->
+          <span v-if="runnerTrouble" class="block truncate text-[11.5px]"
+                :class="live.busy ? 'text-warn' : 'text-critical'">{{ runnerTrouble }}</span>
         </span>
       </div>
       <!-- A switcher only when there is something to switch to. -->
@@ -191,89 +280,10 @@ const sectionOn = (x, s) => (x.query ? route.name === x.to && route.query.suite 
     </div>
 
     <nav class="flex-1 overflow-y-auto pb-4" :class="rail ? 'px-2' : 'px-3'">
-      <div class="flex items-center pb-2" :class="rail ? 'justify-center' : 'justify-between px-2'">
-        <span v-if="!rail" class="eyebrow">Test suites</span>
-        <RouterLink to="/suites/new" title="Onboard a project" aria-label="Onboard a project"
-                    class="grid size-5 place-items-center rounded-md text-[15px] leading-none text-ink-3
-                           hover:bg-ink/[0.05] hover:text-ink">+</RouterLink>
-      </div>
-
-      <p v-if="suites.listed && !suites.list.length && !rail" class="px-2 py-1.5 text-[12.5px] text-ink-3">
-        None yet — <RouterLink to="/suites/new" class="text-brand-2 underline underline-offset-2">onboard one</RouterLink>.
-      </p>
-
-      <template v-for="s in suites.list" :key="s.id">
-        <!-- The site's own mark, not a glyph every suite shares. `title` and
-             `aria-label` are on the link rather than the image because in the
-             rail the visible label is gone, and the name has to survive that
-             for a hover and for a screen reader alike. -->
-        <RouterLink :to="`/suites/${s.id}`" class="nav-item hover:bg-ink/[0.04] hover:text-ink"
-                    :class="[openId === s.id && 'nav-item-on', rail && 'nav-item-rail']"
-                    :title="rail ? `${s.name} — ${s.cases} case${s.cases === 1 ? '' : 's'}` : null"
-                    :aria-label="rail ? s.name : null">
-          <SiteIcon :origin="s.origin" :name="s.name" :size="rail ? 'size-5' : 'size-4'" />
-          <span v-if="!rail" class="truncate">{{ s.name }}</span>
-          <span v-if="!rail" class="ml-auto shrink-0 text-[11px] tabular-nums text-ink-3">{{ s.cases }}</span>
-        </RouterLink>
-
-        <!-- The open suite's own sections, hung off it so the nav answers
-             "where am I" without the breadcrumb having to. -->
-        <!-- Bound by name rather than by active-class: `text-ink-3` and
-             `text-brand-2` are both plain text utilities, so which one wins is
-             decided by stylesheet order, not by the order they are written
-             here — the selected section came out grey. -->
-        <!-- A line runs down from the suite's mark and the section names line
-             up with the suite's name, so the four read as its children rather
-             than as four more suites set a little to the right. The open one
-             colours its stretch of the line instead of wearing a second pill
-             under the suite's own. -->
-        <div v-if="openId === s.id && !rail" class="mb-1.5 ml-[1.05rem] mt-0.5 border-l border-hairline pl-[7px]">
-          <RouterLink v-for="x in SECTIONS" :key="x.to" :to="sectionLink(x, s)"
-            class="relative block rounded-md px-2.5 py-1.5 text-[12.5px] leading-5
-                   before:absolute before:bottom-1.5 before:top-1.5 before:w-0.5 before:rounded-full
-                   before:left-[-8.3px] before:content-['']"
-            :class="sectionOn(x, s)
-              ? 'font-medium text-brand-2 before:bg-brand'
-              : 'text-ink-3 before:bg-transparent hover:bg-ink/[0.04] hover:text-ink'">
-            {{ x.label }}
-          </RouterLink>
-        </div>
-      </template>
-
-      <p v-if="!rail" class="eyebrow px-2 pb-2 pt-6">General</p>
-      <div v-else class="mx-2 mb-2 mt-6 border-t border-hairline" />
-      <RouterLink to="/dashboard" class="nav-item hover:bg-ink/[0.04] hover:text-ink" active-class="nav-item-on"
-                  :class="rail && 'nav-item-rail'" :title="rail ? 'Run history' : null" :aria-label="rail ? 'Run history' : null">
-        <Icon name="history" class="size-4 shrink-0" />
-        <span v-if="!rail">Run history</span>
-      </RouterLink>
-      <RouterLink to="/defects" class="nav-item hover:bg-ink/[0.04] hover:text-ink" active-class="nav-item-on"
-                  :class="rail && 'nav-item-rail'" :title="rail ? 'Defects' : null" :aria-label="rail ? 'Defects' : null">
-        <Icon name="defects" class="size-4 shrink-0" />
-        <span v-if="!rail">Defects</span>
-      </RouterLink>
-      <RouterLink to="/console" class="nav-item relative hover:bg-ink/[0.04] hover:text-ink" active-class="nav-item-on"
-                  :class="rail && 'nav-item-rail'" :title="rail ? 'Console' : null" :aria-label="rail ? 'Console' : null">
-        <Icon name="console" class="size-4 shrink-0" />
-        <span v-if="!rail">Console</span>
-        <span v-if="live.recording" :class="rail ? 'absolute right-1 top-1 size-1.5' : 'ml-auto size-1.5'" class="animate-pulse rounded-full bg-critical" title="recording" />
-        <span v-else-if="live.running" :class="rail ? 'absolute right-1 top-1 size-1.5' : 'ml-auto size-1.5'" class="animate-pulse rounded-full bg-brand" title="running" />
-      </RouterLink>
-      <!-- The dot is steady, not pulsing: an open incident is a state, where
-           the console's dots are activity. -->
-      <!-- Lit only for monitoring across every project: on one suite's
-           monitoring, the suite's own Monitoring section is the lit one. -->
-      <RouterLink to="/monitoring" class="nav-item relative hover:bg-ink/[0.04] hover:text-ink"
-                  :class="[rail && 'nav-item-rail', route.name === 'monitoring' && !route.query.suite && 'nav-item-on']"
-                  :title="rail ? 'Agentic monitoring' : null" :aria-label="rail ? 'Agentic monitoring' : null">
-        <Icon name="monitor" class="size-4 shrink-0" />
-        <span v-if="!rail">Agentic monitoring</span>
-        <span v-if="live.openIncidents" :class="rail ? 'absolute right-1 top-1 size-1.5' : 'ml-auto size-1.5'" class="rounded-full bg-critical"
-              :title="`${live.openIncidents} open incident${live.openIncidents === 1 ? '' : 's'}`" />
-      </RouterLink>
-      <!-- Ask the thing questions in words, rather than reading its output. It
-           sits with the rest of the general pages because a conversation is
-           about whatever you are looking at, not about one suite. -->
+      <!-- The prompt, first. Describing what to test in words is the front
+           door, and everything below it — the suites, the runs, the defects —
+           is what that produces. It is not under one suite because a
+           conversation is about whatever you are looking at. -->
       <RouterLink to="/chat" class="nav-item relative hover:bg-ink/[0.04] hover:text-ink" active-class="nav-item-on"
                   :class="rail && 'nav-item-rail'" :title="rail ? 'Chat' : null" :aria-label="rail ? 'Chat' : null">
         <Icon name="chat" class="size-4 shrink-0" />
@@ -285,8 +295,11 @@ const sectionOn = (x, s) => (x.query ? route.name === x.to && route.query.suite 
       </RouterLink>
       <!-- The conversations, hung off Chat the way a suite's sections hang off
            the suite: a fold, a new one, a search once there are enough to need
-           one, and the recent ones by title with the open one lit. -->
-      <div v-if="!rail" class="mb-1.5 ml-[1.05rem] mt-0.5 border-l border-hairline pl-[7px]" data-chats>
+           one, and the recent ones by title with the open one lit.
+           Not inside a project: eight conversation titles between the workspace
+           and the project's own nav would put the thing you came for below the
+           fold, and Chat itself is still one press away above. -->
+      <div v-if="!rail && !inProject" class="mb-1.5 ml-[1.05rem] mt-0.5 border-l border-hairline pl-[7px]" data-chats>
         <button type="button" :aria-expanded="ui.chatsOpen"
                 class="flex w-full items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.07em] text-ink-3 hover:bg-ink/[0.04] hover:text-ink"
                 @click="ui.toggleChats()">
@@ -324,6 +337,120 @@ const sectionOn = (x, s) => (x.query ? route.name === x.to && route.query.suite 
                   @click="showAllChats = !showAllChats">{{ showAllChats ? 'Show fewer' : `Show all ${chat.conversations.length}` }}</button>
         </template>
       </div>
+
+      <!-- ───────────────────────── inside a project ───────────────────────── -->
+      <!-- The way back, first, because it is the one control whose absence
+           would trap somebody: the list of projects is no longer on screen and
+           the browser's own Back is not a thing a product may rely on. -->
+      <template v-if="inProject && !rail">
+        <RouterLink to="/suites"
+                    class="mb-1 flex items-center gap-2 rounded-lg px-2 py-1.5 text-[12.5px] text-ink-3 hover:bg-ink/[0.04] hover:text-ink">
+          <span class="text-[13px] leading-none" aria-hidden="true">←</span>
+          All projects
+        </RouterLink>
+
+        <!-- The project itself as a heading rather than a link. It IS the
+             context; a link back to the place you already are is a control
+             that does nothing. Overview is in the list below for that. -->
+        <div class="mb-1.5 flex items-center gap-2 px-2 py-1">
+          <SiteIcon :origin="openSuite.origin" :name="openSuite.name" size="size-5" />
+          <span class="truncate text-[13.5px] font-medium">{{ openSuite.name }}</span>
+        </div>
+
+        <RouterLink v-for="x in SECTIONS" :key="x.to" :to="sectionLink(x, openSuite)"
+                    class="nav-item hover:bg-ink/[0.04] hover:text-ink"
+                    :class="sectionOn(x, openSuite) && 'nav-item-on'">
+          <Icon :name="x.icon" class="size-4 shrink-0" />
+          <span class="truncate">{{ x.label }}</span>
+          <span v-if="x.count && x.count(openSuite)" class="ml-auto shrink-0 text-[11px] tabular-nums text-ink-3">{{ x.count(openSuite) }}</span>
+          <!-- The one piece of live state the nav carries: the browser is
+               recording, or a run is going. It moved here with the console
+               itself — losing it would mean the only way to know a recording
+               was still on was to open the page it is on. -->
+          <template v-if="x.to === 'console'">
+            <span v-if="live.recording" class="ml-auto size-1.5 shrink-0 animate-pulse rounded-full bg-critical" title="recording" />
+            <span v-else-if="live.running" class="ml-auto size-1.5 shrink-0 animate-pulse rounded-full bg-brand" title="running" />
+          </template>
+        </RouterLink>
+      </template>
+
+      <!-- ──────────────────────── the workspace's projects ──────────────────── -->
+      <!-- The rail keeps the list whichever view it is: at 64px there is no
+           room for a project's sections, and a column of site marks is still
+           the fastest way between projects. -->
+      <template v-if="!inProject || rail">
+      <div class="flex items-center pb-2" :class="rail ? 'justify-center' : 'justify-between px-2'">
+        <span v-if="!rail" class="eyebrow">Test suites</span>
+        <RouterLink to="/suites/new" title="Onboard a project" aria-label="Onboard a project"
+                    class="grid size-5 place-items-center rounded-md text-[15px] leading-none text-ink-3
+                           hover:bg-ink/[0.05] hover:text-ink">+</RouterLink>
+      </div>
+
+      <p v-if="suites.listed && !suites.list.length && !rail" class="px-2 py-1.5 text-[12.5px] text-ink-3">
+        None yet — <RouterLink to="/suites/new" class="text-brand-2 underline underline-offset-2">onboard one</RouterLink>.
+      </p>
+
+      <template v-for="s in suites.list" :key="s.id">
+        <!-- The site's own mark, not a glyph every suite shares. `title` and
+             `aria-label` are on the link rather than the image because in the
+             rail the visible label is gone, and the name has to survive that
+             for a hover and for a screen reader alike. -->
+        <RouterLink :to="`/suites/${s.id}`" class="nav-item hover:bg-ink/[0.04] hover:text-ink"
+                    :class="[openId === s.id && 'nav-item-on', rail && 'nav-item-rail']"
+                    :title="rail ? `${s.name} — ${s.cases} case${s.cases === 1 ? '' : 's'}` : null"
+                    :aria-label="rail ? s.name : null">
+          <SiteIcon :origin="s.origin" :name="s.name" :size="rail ? 'size-5' : 'size-4'" />
+          <span v-if="!rail" class="truncate">{{ s.name }}</span>
+          <span v-if="!rail" class="ml-auto shrink-0 text-[11px] tabular-nums text-ink-3">{{ s.cases }}</span>
+        </RouterLink>
+
+        <!-- The open suite's own sections, hung off it so the nav answers
+             "where am I" without the breadcrumb having to. -->
+        <!-- Bound by name rather than by active-class: `text-ink-3` and
+             `text-brand-2` are both plain text utilities, so which one wins is
+             decided by stylesheet order, not by the order they are written
+             here — the selected section came out grey. -->
+        <!-- A line runs down from the suite's mark and the section names line
+             up with the suite's name, so the four read as its children rather
+             than as four more suites set a little to the right. The open one
+             colours its stretch of the line instead of wearing a second pill
+             under the suite's own. -->
+      </template>
+      </template>
+
+      <p v-if="!rail" class="eyebrow px-2 pb-2 pt-6">General</p>
+      <div v-else class="mx-2 mb-2 mt-6 border-t border-hairline" />
+      <RouterLink to="/dashboard" class="nav-item hover:bg-ink/[0.04] hover:text-ink" active-class="nav-item-on"
+                  :class="rail && 'nav-item-rail'" :title="rail ? 'Run history' : null" :aria-label="rail ? 'Run history' : null">
+        <Icon name="history" class="size-4 shrink-0" />
+        <span v-if="!rail">Run history</span>
+      </RouterLink>
+      <RouterLink to="/defects" class="nav-item hover:bg-ink/[0.04] hover:text-ink" active-class="nav-item-on"
+                  :class="rail && 'nav-item-rail'" :title="rail ? 'Defects' : null" :aria-label="rail ? 'Defects' : null">
+        <Icon name="defects" class="size-4 shrink-0" />
+        <span v-if="!rail">Defects</span>
+      </RouterLink>
+      <!-- The dot is steady, not pulsing: an open incident is a state, where
+           the console's dots are activity. -->
+      <!-- Lit only for monitoring across every project: on one suite's
+           monitoring, the suite's own Monitoring section is the lit one. -->
+      <RouterLink to="/monitoring" class="nav-item relative hover:bg-ink/[0.04] hover:text-ink"
+                  :class="[rail && 'nav-item-rail', route.name === 'monitoring' && !route.query.suite && 'nav-item-on']"
+                  :title="rail ? 'Agentic monitoring' : null" :aria-label="rail ? 'Agentic monitoring' : null">
+        <Icon name="monitor" class="size-4 shrink-0" />
+        <span v-if="!rail">Agentic monitoring</span>
+        <span v-if="live.openIncidents" :class="rail ? 'absolute right-1 top-1 size-1.5' : 'ml-auto size-1.5'" class="rounded-full bg-critical"
+              :title="`${live.openIncidents} open incident${live.openIncidents === 1 ? '' : 's'}`" />
+      </RouterLink>
+      <!-- What the monitors caught, under the thing that catches it: reading
+           what has happened is a different errand from choosing what to watch,
+           so it is its own page rather than a section of that one. -->
+      <RouterLink v-if="!rail" to="/monitoring/incidents"
+                  class="nav-item ml-6 hover:bg-ink/[0.04] hover:text-ink"
+                  :class="route.name === 'incidents' && 'nav-item-on'">
+        <span class="text-[13px]">Incidents</span>
+        <span v-if="live.openIncidents" class="ml-auto text-[12px] tabular-nums text-critical">{{ live.openIncidents }}</span>
+      </RouterLink>
 
       <p v-if="!rail" class="eyebrow px-2 pb-2 pt-6">Admin</p>
       <div v-else class="mx-2 mb-2 mt-6 border-t border-hairline" />
@@ -374,5 +501,6 @@ const sectionOn = (x, s) => (x.query ? route.name === x.to && route.query.suite 
         <span v-if="!rail">Sign out</span>
       </button>
     </div>
+
   </aside>
 </template>

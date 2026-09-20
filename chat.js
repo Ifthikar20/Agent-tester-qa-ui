@@ -327,6 +327,11 @@ export function describe(space) {
   const store = space.chat;
   return {
     llm: cfg.llm,
+    // Whether this runner carries the plan actions at all (server.js
+    // planPageOf/runDraftsOf). A deployment without them offers no drafting,
+    // and saying so here is how a caller finds out — rather than inferring it
+    // from some other route that happens to be absent too.
+    drafting: typeof cfg.actions?.plans === 'function',
     budget: budgetState(),
     busy: store.busy ? { id: store.busy.id, conversationId: store.busy.conversationId } : null,
     stopping: store.stopping ?? null,
@@ -515,6 +520,36 @@ async function execute(p, { space, ent, switches, redact, emit, propose, choices
       const result = { page: redact(pg.name), targets: (r.page?.targets ?? []).length, linked: (r.page?.linked ?? []).length, url: maskUrl(r.url) };
       landed('scan_page', `${result.targets} targets, ${result.linked} links`);
       return { ...base, ok: true, result };
+    }
+    if (p.kind === 'explore_site') {
+      // Research the site (server.js exploreSiteOf, explore.js): open it, walk
+      // its own pages without pressing anything, rank them against the words
+      // of the request, keep the relevant ones as a suite. Drafting tests for
+      // the page it found is the NEXT press, not this one — reading a site and
+      // writing tests for it are two decisions.
+      switches?.demand?.('runner.onboarding');
+      const u = normalizeUrl(p.args.url);
+      if (!space.origins.has(u.origin)) return { ...base, refused: { refused: 'needs_origin', origin: u.origin } };
+      started('explore_site');
+      // Progress on the same tool line, updated in place: which page, of how many.
+      const onProgress = ({ path, opened, of }) => emit({ t: 'chat.tool', call: { id: p.id, name: 'explore_site', label: p.label, state: 'start', summary: `reading ${redact(path)} — ${opened + 1} of at most ${of}` } });
+      const r = await cfg.actions.exploreSite({ u, focus: p.args.focus ?? '', name: p.args.name ?? null, suiteId: p.args.suiteId ?? null, space, ent, switches, stopped, onProgress });
+      const result = {
+        suiteId: r.suiteId, name: redact(r.suite?.name ?? ''), origin: maskUrl(r.origin),
+        opened: r.opened, kept: r.kept, halted: r.halted ?? null,
+        pages: (r.pages ?? []).map((x) => ({ id: x.id, name: redact(x.name), path: redact(x.path), score: x.score, why: (x.why ?? []).map(redact) })),
+        best: r.best ? { id: r.best.id, name: redact(r.best.name), path: redact(r.best.path) } : null,
+      };
+      // The next button: draft tests for the page it thinks was meant.
+      if (r.best) {
+        propose({
+          kind: 'plan_page',
+          args: { suiteId: r.suiteId, pageId: r.best.id, focus: p.args.focus ?? '', count: null },
+          label: `read "${redact(r.best.name)}" and draft tests for it`,
+        });
+      }
+      landed('explore_site', `${r.opened} read, ${r.kept} kept${r.halted ? `, ${r.halted}` : ''}`);
+      return { ...base, ok: r.kept > 0, result };
     }
     if (p.kind === 'quickstart') {
       switches?.demand?.('runner.onboarding');

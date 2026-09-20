@@ -14,7 +14,7 @@
  *   node scripts/check-vocabulary.js       (no browser, no server)
  */
 import assert from 'node:assert';
-import { VERBS, OP_NAMES, parseAction, showAction, labelAction } from '../vocabulary.js';
+import { VERBS, OP_NAMES, parseAction, showAction, labelAction, sayAction } from '../vocabulary.js';
 import { parse, toFlow, asFlowchart } from '../flow.js';
 import { OPS } from '../ops.js';
 
@@ -42,6 +42,8 @@ const SAMPLES = {
                           { op: 'choose', target: 'label:Plan', value: 'Log in later' }],
   'press':               [{ op: 'press', key: 'Enter', target: 'searchbox:Search' },
                           { op: 'press', key: 'Escape' }, { op: 'press', key: 'Shift+Tab' }],
+  'goal':                [{ op: 'goal', text: 'sign in as the demo student' },
+                          { op: 'goal', text: 'get to the checkout with one item in the basket' }],
   'expect:valueEquals':  [{ op: 'expect', assert: 'valueEquals', target: 'profile.username', value: 'a'.repeat(20) }],
   'expect:atTop':        [{ op: 'expect', assert: 'atTop' }],
   'expect:status':       [{ op: 'expect', assert: 'status', value: 404 }],
@@ -111,6 +113,26 @@ for (const v of VERBS) {
 }
 if (undrawn.length) bad('every verb draws as more than its name', [...new Set(undrawn)].join(', '));
 else ok('every verb draws as more than its name');
+
+/**
+ * And it says itself in plain English (sayAction). A run is read by somebody
+ * who does not know the grammar, so every verb owes them a sentence: one that
+ * starts with a capital, says more than the op's own name, and does not leak
+ * the script's punctuation into it.
+ */
+const unsaid = [];
+for (const v of VERBS) {
+  for (const step of SAMPLES[key(v)] ?? []) {
+    const said = sayAction(step);
+    const wrong = typeof said !== 'string' || said.trim().length < 4
+      || said.trim() === step.op
+      || /^[a-z]/.test(said)
+      || said.includes(' ~ ');
+    if (wrong) unsaid.push(key(v) + ': ' + JSON.stringify(said));
+  }
+}
+if (unsaid.length) bad('every verb says itself in plain English', unsaid.join(' | '));
+else ok('every verb says itself in plain English', sayAction(SAMPLES.click[0]));
 
 const unrun = OP_NAMES.filter((n) => !OPS[n]);
 const undeclared = Object.keys(OPS).filter((n) => !OP_NAMES.includes(n));

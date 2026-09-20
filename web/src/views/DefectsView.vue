@@ -26,8 +26,10 @@ import {
   subtitleOf, tilesOf, whereOf,
 } from '@/defects';
 import { when } from '@/time';
+import { useSuites } from '@/stores/suites';
 import TopBar from '@/components/TopBar.vue';
 import HeroPanel from '@/components/HeroPanel.vue';
+import ProjectFilter from '@/components/ProjectFilter.vue';
 import StatTile from '@/components/StatTile.vue';
 import EmptyState from '@/components/EmptyState.vue';
 import Icon from '@/components/Icon.vue';
@@ -36,6 +38,7 @@ import DefectDrawer from '@/components/DefectDrawer.vue';
 const route = useRoute();
 const router = useRouter();
 const live = useLive();
+const suites = useSuites();
 
 const data = ref(null);            // { defects, totals } from the runner
 const loading = ref(true);
@@ -52,13 +55,47 @@ async function load(quiet = false) {
   try { data.value = await api.defects(); } catch (e) { if (!quiet) error.value = e.message; }
   finally { loading.value = false; }
 }
-onMounted(load);
+onMounted(() => {
+  load();
+  // The chips want the projects and their marks — the same list the sidebar draws.
+  if (!suites.list.length) suites.loadList().catch(() => null);
+});
 // The runner says when a run or an incident filed, closed or reopened one (defects.changed): the list follows.
 watch(() => live.defectsVersion, () => load(true));
 watch(() => live.connected, (c) => { if (c) load(true); });
 
-const list = computed(() => data.value?.defects ?? []);
-const tiles = computed(() => tilesOf(list.value, data.value?.totals));
+/**
+ * Every defect this organisation has, and then the ones for the project you
+ * are looking at.
+ *
+ * Narrowed HERE rather than at the runner, and above everything else on the
+ * page, so the four numbers, the status pills and their counts all describe
+ * the same slice. A defect carries the projects it was seen in (`suites`,
+ * defects.js) — a list, not one id, because one failure can be reached by
+ * cases in more than one project and the number is the failure's, not the
+ * project's. Matching on "was it seen here" is therefore the honest test.
+ *
+ * Kept in the address, so a filtered list is a link somebody can paste.
+ */
+const everything = computed(() => data.value?.defects ?? []);
+const project = ref(route.query.project ? String(route.query.project) : null);
+watch(project, (p) => {
+  const query = { ...route.query };
+  if (p) query.project = p; else delete query.project;
+  router.replace({ query });
+});
+const inProject = (d, id) => (d.suites ?? []).some((x) => String(x.id) === id)
+  || (d.cases ?? []).some((c) => String(c.suiteId ?? '') === id);
+const list = computed(() => (project.value ? everything.value.filter((d) => inProject(d, project.value)) : everything.value));
+
+/** How many defects each project has, for the chips — from the unfiltered set. */
+const perProject = computed(() => {
+  const by = {};
+  for (const p of suites.list) by[p.id] = everything.value.filter((d) => inProject(d, p.id)).length;
+  return by;
+});
+
+const tiles = computed(() => tilesOf(list.value, project.value ? null : data.value?.totals));
 const rows = computed(() => selectRows(list.value, { status: status.value, source: source.value, severities: severities.value, q: q.value, sort: sort.value }));
 /** How many each status filter would show, so a pill says what is behind it. */
 const countFor = (key) => selectRows(list.value, { status: key, source: source.value, severities: severities.value, q: q.value }).length;
@@ -113,6 +150,11 @@ const emptyBody = computed(() => (filtered.value
     </HeroPanel>
 
     <p v-if="error" class="mb-4 rounded-xl border border-critical/25 bg-critical/5 px-4 py-3 text-[13px] text-critical">{{ error }}</p>
+
+    <!-- Above the numbers, because it changes them. The tiles, the status
+         pills and their counts are all this slice — a project filter sitting
+         beside the list would leave "Open 17" over a list of three. -->
+    <ProjectFilter v-if="suites.list.length > 1" v-model="project" :projects="suites.list" :counts="perProject" class="mb-5" />
 
     <div class="mb-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4" data-defect-tiles>
       <StatTile label="Open" :value="tiles.open" :note="tiles.unassigned ? `${tiles.unassigned} unassigned` : 'all assigned'" />

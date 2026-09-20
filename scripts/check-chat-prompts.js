@@ -135,7 +135,9 @@ const can = {};
   const d = await api('GET', '/api/defects');
   const first = (d.json?.defects ?? [])[0];
   can.defect_by_id = typeof first?.id === 'string' && /^DEF-/.test(first.id);
-  can.plans = (await api('GET', '/api/settings/heal')).status === 200;
+  // What the runner says it offers, not what some other route's absence
+  // implies. A runner without the plan actions answers `drafting: false`.
+  can.plans = (await api('GET', '/api/chat')).json?.drafting === true;
   can.no_plans = !can.plans;
   console.log(`     defects numbered: ${can.defect_by_id ? first.id : 'no (derived from history)'} · drafting offered: ${can.plans ? 'yes' : 'no'}`);
   can.DEFECT = can.defect_by_id ? first.id : null;

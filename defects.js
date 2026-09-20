@@ -354,6 +354,10 @@ export function open(org) {
     // not blame the application, and one that passes has proven nothing about
     // it yet. The watermark still moves past the row (sync).
     if (r.draft) return;
+    // And a run somebody stopped (runs.js `stopped`) is not news either way:
+    // the steps it did not reach are not passes, and the step it was on when
+    // the browser was taken away from it is not a failure of the site.
+    if (r.stopped) return;
     if (r.ok) {
       // Any affected case passing since the failure was last seen closes it:
       // nobody has to remember to.

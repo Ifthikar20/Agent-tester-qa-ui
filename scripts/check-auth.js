@@ -499,9 +499,24 @@ const closedWith = (ws) => new Promise((res) => {
 });
 
 try {
+  /**
+   * Up means READY, not merely listening.
+   *
+   * This waited on `/app/`, which express answers the moment it is listening —
+   * a long way before the socket layer is attached. Everything below opens
+   * sockets and expects to be greeted, so the wait landed inside the runner's
+   * own boot window and the greeting assertion failed with the socket plainly
+   * open. `/healthz` is the endpoint that answers this question (it is 503
+   * until the runner is ready, which is what the docker healthcheck and
+   * scripts/deploy.sh read), so it is the one to ask.
+   *
+   * Both, because they are two claims: that the UI is served at all, and that
+   * the runner behind it is up.
+   */
   let up = false;
   for (let i = 0; i < 60 && !up; i++) {
-    up = await fetch(`${BASE}/app/`).then((r) => r.ok).catch(() => false);
+    const served = await fetch(`${BASE}/app/`).then((r) => r.ok).catch(() => false);
+    up = served && await fetch(`${BASE}/healthz`).then((r) => r.ok).catch(() => false);
     if (!up) await wait(500);
   }
   if (!up) {

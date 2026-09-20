@@ -24,7 +24,7 @@ import { useLive } from '@/stores/live';
 import { useSuites } from '@/stores/suites';
 import {
   PAGE_RULES, PAGE_SELECTOR, chipText, chipTone, clauseChips, defaultRule, describeElement, diffChips, elementFacts, hoverLine, incidentPill,
-  isBlank, llmBadge, metricsLine, originOfUrl, pageLines, pathOfUrl, projectOf, selectorLine, severityTone, specChips, stateTone, suggestionsFor,
+  isBlank, llmBadge, metricsLine, originOfUrl, pageLines, pageNotes, pathOfUrl, projectOf, selectorLine, severityTone, specChips, stateTone, suggestionsFor,
   verdictSource,
 } from '@/monitoring';
 import { clock, when } from '@/time';
@@ -494,98 +494,26 @@ const justCompiled = (m) => {
       </div>
 
       <!-- incidents ------------------------------------------------- -->
+      <!--
+        What the monitors caught lives on its own page now: reading what has
+        already happened is a different errand from choosing what to watch.
+        The line is here because this is where you are when you wonder.
+      -->
       <section class="card mt-4 p-5">
         <div class="flex flex-wrap items-center gap-3">
           <h2 class="text-[15px] font-medium">Incidents</h2>
           <span v-if="openCount" class="rounded-full bg-critical/10 px-2 py-0.5 text-[12px] font-medium text-critical">
             {{ openCount }} open
           </span>
-          <div class="flex items-center gap-2">
-            <button v-for="f in ['open', 'all']" :key="f"
-                    class="rounded-full px-3.5 py-1.5 text-[13px]"
-                    :class="only === f ? 'bg-brand-50 font-medium text-brand-2' : 'border border-hairline hover:border-ink/25'"
-                    @click="only = f">
-              {{ f === 'open' ? 'Open' : 'Everything' }}
-            </button>
-          </div>
-          <button class="ml-auto rounded-full border border-hairline px-3.5 py-1.5 text-[13px] hover:border-ink/25"
-                  @click="load">Refresh</button>
+          <RouterLink :to="{ name: 'incidents', query: projectId ? { suite: projectId } : {} }"
+                      class="ml-auto rounded-full border border-hairline px-3.5 py-1.5 text-[13px] hover:border-ink/25">
+            {{ openCount ? 'Read them' : 'Open incidents' }}
+          </RouterLink>
         </div>
-
-        <p v-if="loading" class="mt-3 text-[13.5px] text-ink-3">Reading the runner’s monitors…</p>
-        <p v-if="loadError" class="mt-3 rounded-lg border border-critical/25 bg-critical/5 px-3 py-2 text-[12.5px] text-critical">
-          {{ loadError }}
+        <p class="mt-1.5 max-w-2xl text-[13px] leading-relaxed text-ink-2">
+          <template v-if="openCount">Something a monitor watches has broken its rule. The evidence — the numbers, the clips, the verdict — is on the incidents page.</template>
+          <template v-else>Nothing is broken right now. When a monitored element breaks its rule, the evidence lands on the incidents page.</template>
         </p>
-
-        <EmptyState v-if="!loading && !incidents.length" class="mt-4"
-                    :title="only === 'open' ? 'No incidents' : 'Nothing resolved yet'"
-                    body="When a monitored element breaks its rule, the evidence lands here — before and after, the numbers, and a verdict." />
-
-        <div v-else class="mt-4">
-          <section v-for="inc in incidents" :key="inc.id" class="card mb-3 p-5" :class="inc.status === 'resolved' && 'opacity-75'">
-            <div class="flex flex-wrap items-start gap-3">
-              <span class="mt-0.5 shrink-0 rounded-full px-2.5 py-1 text-[11.5px] font-medium" :class="incidentPill(inc).tone" :title="incidentPill(inc).title">
-                {{ incidentPill(inc).label }}
-              </span>
-              <p class="min-w-0 grow text-[13.5px] font-medium">{{ inc.monitorLabel }}</p>
-              <span class="text-[12.5px] tabular-nums text-ink-3">
-                {{ clock(inc.openedAt) }}<template v-if="inc.resolvedAt"> → {{ clock(inc.resolvedAt) }}</template> · {{ when(inc.openedAt) }}
-              </span>
-            </div>
-            <p class="mt-1 truncate font-mono text-[11.5px] text-ink-3" :title="inc.selector">{{ selectorLine(inc.selector) }}</p>
-            <p class="mt-1 text-[12.5px] italic text-ink-2">“{{ inc.ruleText }}”</p>
-
-            <div v-for="x in inc.violations" :key="x.checkId" class="mt-2 rounded-lg border border-critical/25 bg-critical/5 px-3 py-2 text-[12.5px]">
-              <p>{{ x.message }}</p>
-              <p class="mt-0.5 font-mono text-[11.5px] text-ink-2">
-                actual {{ x.actual }} · expected {{ x.expected }}<template v-if="x.baseline != null"> · baseline {{ x.baseline }}</template>
-              </p>
-            </div>
-
-            <div v-if="diffChips(inc.diff).length" class="mt-2 flex flex-wrap gap-1.5">
-              <span v-for="d in diffChips(inc.diff)" :key="d" class="rounded-full border border-hairline px-2 py-0.5 font-mono text-[11.5px] text-ink-2">{{ d }}</span>
-            </div>
-            <!-- The whole page: what was added, what went, what moved, what was reworded — the samples; the chips have the totals. -->
-            <ul v-if="pageLines(inc.diff).length" class="mt-2 space-y-0.5 font-mono text-[11.5px] text-ink-2" data-page-lines>
-              <li v-for="(l, i) in pageLines(inc.diff)" :key="i" class="truncate" :title="l">{{ l }}</li>
-            </ul>
-
-            <div class="mt-3 grid gap-2 sm:grid-cols-2">
-              <Shot caption="before (baseline)" :name="inc.before?.screenshot" :alt="`${inc.monitorLabel} before`" />
-              <Shot caption="after" :name="inc.after?.screenshot" :alt="`${inc.monitorLabel} after`" />
-            </div>
-
-            <div v-if="inc.verdict" class="mt-3 rounded-xl border border-hairline bg-ground p-3.5">
-              <div class="flex flex-wrap items-center gap-1.5">
-                <span class="rounded-full px-2 py-0.5 text-[11.5px] font-medium" :class="severityTone(inc.verdict.severity)">
-                  {{ inc.verdict.severity }} severity
-                </span>
-                <span v-if="verdictSource(inc.verdict)" class="rounded-full border px-2 py-0.5 text-[11.5px]"
-                      :class="chipTone(verdictSource(inc.verdict).tone)" :title="verdictSource(inc.verdict).title">
-                  {{ verdictSource(inc.verdict).label }}
-                </span>
-                <!-- Judged fine on a judged clause: the judge closed it and the
-                     element as it is now became the baseline. Judged fine on a
-                     hard check, the incident stays open — the number still fails. -->
-                <span v-if="inc.resolvedBy === 'judge'" class="rounded-full border px-2 py-0.5 text-[11.5px]" :class="chipTone('info')"
-                      title="Claude read the change and found the rule still holds — the monitor took the new state as its baseline">
-                  judged fine — new baseline
-                </span>
-                <span v-else-if="inc.verdict.violation === false" class="rounded-full border px-2 py-0.5 text-[11.5px]" :class="chipTone('warn')">
-                  judge: false alarm
-                </span>
-              </div>
-              <p class="mt-2 text-[13px] leading-relaxed">{{ inc.verdict.explanation }}</p>
-            </div>
-
-            <div v-if="inc.status === 'open'" class="mt-3 flex items-center gap-3">
-              <Btn size="sm" variant="ghost" :busy="pending === inc.id" busy-label="Resolving…"
-                   title="Closes this incident. Relative rules take the current state as their new baseline; an absolute rule that still fails stays acknowledged until the element changes again."
-                   @click="resolve(inc)">Resolve &amp; accept current state</Btn>
-              <span v-if="rowError && rowError.id === inc.id" class="text-[12.5px] text-critical">{{ rowError.msg }}</span>
-            </div>
-          </section>
-        </div>
       </section>
     </div>
 
